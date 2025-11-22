@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 import os
+import json
 from clumio_client import ClumioClient
 
 app = Flask(__name__)
@@ -54,7 +55,32 @@ def inventory():
                 }
                 parsed_result.append(parsed_item)
             
-            return jsonify(parsed_result), 200
+            # Format as JSON string for Slack
+            json_payload = json.dumps(parsed_result, indent=2)
+            
+            # Create Slack-formatted response
+            slack_response = {
+                "response_type": "ephemeral",
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Clumio Inventory",
+                            "emoji": True
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"```{json_payload}```"
+                        }
+                    }
+                ]
+            }
+            
+            return jsonify(slack_response), 200
         else:
             # For EC2 or other types, return the raw response
             return jsonify(result), 200
