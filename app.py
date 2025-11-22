@@ -41,7 +41,24 @@ def inventory():
     try:
         # Call Clumio API
         result = clumio_client.get_inventory(inventory_type)
-        return jsonify(result), 200
+        
+        # Parse and format the response for S3 type
+        if inventory_type == 's3':
+            parsed_result = []
+            items = result.get('_embedded', {}).get('items', [])
+            
+            for item in items:
+                parsed_item = {
+                    'bucket-id': item.get('bucket_id', ''),
+                    'bucket-name': item.get('bucket_name', '')
+                }
+                parsed_result.append(parsed_item)
+            
+            return jsonify(parsed_result), 200
+        else:
+            # For EC2 or other types, return the raw response
+            return jsonify(result), 200
+            
     except Exception as e:
         return jsonify({
             'error': f'Failed to retrieve inventory: {str(e)}'
