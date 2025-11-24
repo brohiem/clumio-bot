@@ -90,11 +90,13 @@ def inventory():
     - type: 's3' or 'ec2'
     """
     # Get type parameter from query string (GET) or JSON/form body (POST)
+    slack_form_data = None
     if request.method == 'GET':
         inventory_type = request.args.get('type')
     else:
         # Handle both JSON and form-encoded POST requests (e.g., from Slack)
-        # Try multiple methods to extract the type parameter
+        # Slack sends application/x-www-form-urlencoded with properties like:
+        # token, team_id, channel_id, user_id, command, text (e.g., "type=s3 region=us-west-2")
         inventory_type = None
         
         # 1. Try query string first (works for all POST requests)
@@ -103,19 +105,43 @@ def inventory():
         # 2. Try JSON body
         if not inventory_type:
             try:
-                data = request.get_json(silent=True, force=True)
-                if data and isinstance(data, dict):
-                    inventory_type = data.get('type')
-            except:
-                pass
+                json_data = request.get_json(silent=True, force=True)
+                if json_data and isinstance(json_data, dict):
+                    inventory_type = json_data.get('type')
+            except Exception as e:
+                print(f"Error parsing JSON: {e}")
         
-        # 3. Try form data
-        if not inventory_type and request.form:
-            inventory_type = request.form.get('type')
+        # 3. Try form data (Slack sends form-encoded data)
+        if request.form:
+            # Capture all form data that Slack sends
+            slack_form_data = dict(request.form)
+            
+            # Extract type from form data if present
+            if not inventory_type:
+                inventory_type = request.form.get('type')
+            
+            # Parse the 'text' field from Slack (e.g., "type=s3 region=us-west-2")
+            slack_text = request.form.get('text', '')
+            if slack_text and not inventory_type:
+                # Parse text like "type=s3 region=us-west-2"
+                parts = slack_text.split()
+                for part in parts:
+                    if '=' in part:
+                        key, value = part.split('=', 1)
+                        if key.strip() == 'type':
+                            inventory_type = value.strip()
+                            break
         
         # 4. Try values (for form data that might not be in request.form)
         if not inventory_type and request.values:
             inventory_type = request.values.get('type')
+        
+        # If we have form data from Slack, return it directly
+        if slack_form_data:
+            return jsonify({
+                'slack_post_data': slack_form_data,
+                'message': 'Returning the form data that Slack sent in the POST request'
+            }), 200
     
     # Validate required parameter
     if not inventory_type:
