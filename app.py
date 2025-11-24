@@ -120,12 +120,23 @@ def inventory():
     # Validate required parameter
     if not inventory_type:
         # Provide helpful error message with debugging info
+        try:
+            raw_data = request.get_data(as_text=True)
+        except:
+            raw_data = "Unable to read raw data"
+        
         received_data = {
             'method': request.method,
             'has_json': request.is_json,
             'form_keys': list(request.form.keys()) if request.form else [],
+            'form_values': dict(request.form) if request.form else {},
             'args_keys': list(request.args.keys()),
-            'content_type': request.content_type
+            'args_values': dict(request.args),
+            'values_keys': list(request.values.keys()) if request.values else [],
+            'values_dict': dict(request.values) if request.values else {},
+            'content_type': request.content_type,
+            'headers': {k: str(v) for k, v in request.headers.items() if k.lower() not in ['authorization', 'cookie']},
+            'raw_data_preview': raw_data[:500] if raw_data else None
         }
         return jsonify({
             'error': 'Missing required parameter: type',
