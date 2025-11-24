@@ -7,6 +7,11 @@ from slack_bolt.adapter.flask import SlackRequestHandler
 
 app = Flask(__name__)
 
+# Configure Flask to handle different content types from Slack
+# Slack sends application/x-www-form-urlencoded for slash commands
+# and application/json for Events API
+app.config['JSON_AS_ASCII'] = False
+
 # Initialize Clumio client
 clumio_client = ClumioClient(
     api_token=os.getenv('CLUMIO_API_TOKEN', ''),
@@ -301,10 +306,37 @@ if slack_app:
     # Slack Events API endpoint
     @app.route("/slack/events", methods=["POST"])
     def slack_events():
-        """Handle Slack events"""
-        if slack_handler:
+        """Handle Slack events and commands"""
+        if not slack_handler:
+            return jsonify({"error": "Slack not configured"}), 500
+        
+        try:
+            # Handle URL verification challenge from Slack (Events API)
+            # This happens when Slack first verifies your endpoint URL
+            content_type = request.content_type or ''
+            if 'application/json' in content_type:
+                data = request.get_json(silent=True, force=True)
+                if data and data.get('type') == 'url_verification':
+                    return jsonify({'challenge': data.get('challenge')}), 200
+            
+            # SlackRequestHandler automatically handles:
+            # - application/x-www-form-urlencoded (slash commands)
+            # - application/json (Events API)
+            # It processes the request and returns a Flask response
             return slack_handler.handle(request)
-        return jsonify({"error": "Slack not configured"}), 500
+        except Exception as e:
+            # Log detailed error information
+            import traceback
+            error_msg = str(e)
+            error_details = {
+                "error": error_msg,
+                "content_type": request.content_type,
+                "method": request.method
+            }
+            print(f"Slack event error: {error_msg}")
+            print(f"Content-Type: {request.content_type}")
+            print(traceback.format_exc())
+            return jsonify(error_details), 500
 
 
 # Vercel serverless function handler
