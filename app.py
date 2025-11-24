@@ -89,18 +89,37 @@ def inventory():
     Required input:
     - type: 's3' or 'ec2'
     """
-    # Get type parameter from query string (GET) or JSON body (POST)
+    # Get type parameter from query string (GET) or JSON/form body (POST)
     if request.method == 'GET':
         inventory_type = request.args.get('type')
     else:
-        # Use silent=True so non-JSON payloads (e.g., form-encoded) don't raise 415
-        data = request.get_json(silent=True) or {}
-        inventory_type = data.get('type')
+        # Handle both JSON and form-encoded POST requests (e.g., from Slack)
+        # Try JSON first, then form data, then query string as fallback
+        inventory_type = None
+        if request.is_json:
+            data = request.get_json(silent=True) or {}
+            inventory_type = data.get('type')
+        
+        if not inventory_type and request.form:
+            inventory_type = request.form.get('type')
+        
+        # Also check query string for POST requests (some clients send params in URL)
+        if not inventory_type:
+            inventory_type = request.args.get('type')
     
     # Validate required parameter
     if not inventory_type:
+        # Provide helpful error message with debugging info
+        received_data = {
+            'method': request.method,
+            'has_json': request.is_json,
+            'form_keys': list(request.form.keys()) if request.form else [],
+            'args_keys': list(request.args.keys()),
+            'content_type': request.content_type
+        }
         return jsonify({
-            'error': 'Missing required parameter: type'
+            'error': 'Missing required parameter: type',
+            'received': received_data
         }), 400
     
     # Validate type value
@@ -138,14 +157,14 @@ def restore():
     - bucket-name: string value
     - bucket-id: numeric value (string format)
     """
-    # Get parameters from query string (GET) or JSON body (POST)
+    # Get parameters from query string (GET) or JSON/form body (POST)
     if request.method == 'GET':
         restore_type = request.args.get('type')
         bucket_name = request.args.get('bucket-name')
         bucket_id = request.args.get('bucket-id')
     else:
-        # Allow non-JSON POST bodies without raising 415
-        data = request.get_json(silent=True) or {}
+        # Handle both JSON and form-encoded POST requests (e.g., from Slack)
+        data = request.get_json(silent=True) or request.form.to_dict() or {}
         restore_type = data.get('type')
         bucket_name = data.get('bucket-name')
         bucket_id = data.get('bucket-id')
