@@ -94,18 +94,28 @@ def inventory():
         inventory_type = request.args.get('type')
     else:
         # Handle both JSON and form-encoded POST requests (e.g., from Slack)
-        # Try JSON first, then form data, then query string as fallback
+        # Try multiple methods to extract the type parameter
         inventory_type = None
-        if request.is_json:
-            data = request.get_json(silent=True) or {}
-            inventory_type = data.get('type')
         
+        # 1. Try query string first (works for all POST requests)
+        inventory_type = request.args.get('type')
+        
+        # 2. Try JSON body
+        if not inventory_type:
+            try:
+                data = request.get_json(silent=True, force=True)
+                if data and isinstance(data, dict):
+                    inventory_type = data.get('type')
+            except:
+                pass
+        
+        # 3. Try form data
         if not inventory_type and request.form:
             inventory_type = request.form.get('type')
         
-        # Also check query string for POST requests (some clients send params in URL)
-        if not inventory_type:
-            inventory_type = request.args.get('type')
+        # 4. Try values (for form data that might not be in request.form)
+        if not inventory_type and request.values:
+            inventory_type = request.values.get('type')
     
     # Validate required parameter
     if not inventory_type:
@@ -164,10 +174,33 @@ def restore():
         bucket_id = request.args.get('bucket-id')
     else:
         # Handle both JSON and form-encoded POST requests (e.g., from Slack)
-        data = request.get_json(silent=True) or request.form.to_dict() or {}
-        restore_type = data.get('type')
-        bucket_name = data.get('bucket-name')
-        bucket_id = data.get('bucket-id')
+        # Try multiple methods to extract parameters
+        restore_type = request.args.get('type')
+        bucket_name = request.args.get('bucket-name')
+        bucket_id = request.args.get('bucket-id')
+        
+        # Try JSON body
+        if not restore_type:
+            try:
+                data = request.get_json(silent=True, force=True)
+                if data and isinstance(data, dict):
+                    restore_type = restore_type or data.get('type')
+                    bucket_name = bucket_name or data.get('bucket-name')
+                    bucket_id = bucket_id or data.get('bucket-id')
+            except:
+                pass
+        
+        # Try form data
+        if request.form:
+            restore_type = restore_type or request.form.get('type')
+            bucket_name = bucket_name or request.form.get('bucket-name')
+            bucket_id = bucket_id or request.form.get('bucket-id')
+        
+        # Try values (for form data that might not be in request.form)
+        if request.values:
+            restore_type = restore_type or request.values.get('type')
+            bucket_name = bucket_name or request.values.get('bucket-name')
+            bucket_id = bucket_id or request.values.get('bucket-id')
     
     # Validate required parameter
     if not restore_type:
