@@ -60,7 +60,7 @@ def format_slack_inventory_response(parsed_result):
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": "Clumio Inventory",
+                    "text": "Clumio S3Inventory",
                     "emoji": True
                 }
             },
