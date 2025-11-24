@@ -24,7 +24,13 @@ slack_app = None
 slack_handler = None
 
 if slack_bot_token:
-    slack_app = SlackApp(token=slack_bot_token)
+    # Configure for serverless/FaaS environment
+    # process_before_response=False (default) ensures ack() response is sent immediately
+    # This is critical for meeting Slack's 3-second acknowledgment requirement
+    slack_app = SlackApp(
+        token=slack_bot_token,
+        process_before_response=False  # Send ack() response immediately, don't wait for handler
+    )
     slack_handler = SlackRequestHandler(slack_app)
 
 
@@ -188,6 +194,8 @@ if slack_app:
     @slack_app.command("/inventory")
     def handle_inventory_command(ack, respond, command):
         """Handle /inventory Slack command"""
+        # Acknowledge immediately to satisfy Slack's 3-second requirement
+        # This must be the first thing we do
         ack()
         
         text = command.get("text", "").strip()
@@ -225,6 +233,8 @@ if slack_app:
     @slack_app.command("/restore")
     def handle_restore_command(ack, respond, command):
         """Handle /restore Slack command"""
+        # Acknowledge immediately to satisfy Slack's 3-second requirement
+        # This must be the first thing we do
         ack()
         
         text = command.get("text", "").strip()
