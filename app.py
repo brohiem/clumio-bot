@@ -324,18 +324,24 @@ if slack_app:
             # Handle URL verification challenge from Slack (Events API)
             # This happens when Slack first verifies your endpoint URL
             content_type = request.content_type or ''
+            
+            # Handle JSON content type (Events API) - check for URL verification
             if 'application/json' in content_type:
+                # Use silent=True and force=True to avoid 415 errors
                 data = request.get_json(silent=True, force=True)
-                if data and data.get('type') == 'url_verification':
+                if data and isinstance(data, dict) and data.get('type') == 'url_verification':
                     return jsonify({'challenge': data.get('challenge')}), 200
             
-            # SlackRequestHandler automatically handles:
-            # - application/x-www-form-urlencoded (slash commands)
-            # - application/json (Events API)
-            # It processes the request and returns a Flask response
+            # For form-urlencoded (slash commands) or other content types,
+            # let SlackRequestHandler handle it - it knows how to parse both
+            # We don't try to parse the request ourselves to avoid Content-Type issues
+            
+            # The SlackRequestHandler.handle() method processes the request
+            # and handles both application/x-www-form-urlencoded and application/json
             return slack_handler.handle(request)
+            
         except Exception as e:
-            # Log detailed error information
+            # Log detailed error information for debugging
             import traceback
             error_msg = str(e)
             error_details = {
@@ -345,6 +351,7 @@ if slack_app:
             }
             print(f"Slack event error: {error_msg}")
             print(f"Content-Type: {request.content_type}")
+            print(f"Request data available: {hasattr(request, 'get_data')}")
             print(traceback.format_exc())
             return jsonify(error_details), 500
 
