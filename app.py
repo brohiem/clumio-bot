@@ -135,13 +135,6 @@ def inventory():
         # 4. Try values (for form data that might not be in request.form)
         if not inventory_type and request.values:
             inventory_type = request.values.get('type')
-        
-        # If we have form data from Slack, return it directly
-        if slack_form_data:
-            return jsonify({
-                'slack_post_data': slack_form_data,
-                'message': 'Returning the form data that Slack sent in the POST request'
-            }), 200
     
     # Validate required parameter
     if not inventory_type:
