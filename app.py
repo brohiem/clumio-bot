@@ -106,8 +106,8 @@ def inventory():
         # Get inventory data using shared function
         if inventory_type == 's3':
             parsed_result = get_inventory_data(inventory_type)
-            slack_response = format_slack_inventory_response(parsed_result)
-            return jsonify(slack_response), 200
+            # Return simple JSON array for REST API calls
+            return jsonify(parsed_result), 200
         else:
             # For EC2 or other types, return the raw response
             result = clumio_client.get_inventory(inventory_type)
