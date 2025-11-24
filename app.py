@@ -316,9 +316,13 @@ if slack_app:
             )
     
     # Slack Events API endpoint
-    @app.route("/slack/events", methods=["POST"])
+    @app.route("/slack/events", methods=["GET", "POST"])
     def slack_events():
         """Handle Slack events and commands"""
+        # Handle GET requests (e.g., for health checks or URL verification)
+        if request.method == 'GET':
+            return jsonify({'status': 'ok'}), 200
+        
         if not slack_handler:
             return jsonify({"error": "Slack not configured"}), 500
         
