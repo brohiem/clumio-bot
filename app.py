@@ -177,7 +177,7 @@ def restore():
         }), 500
 
 
-@app.route('/health', methods=['GET'])
+@app.route('/health', methods=['GET', 'POST'])
 def health():
     """Health check endpoint"""
     return jsonify({'status': 'ok'}), 200
