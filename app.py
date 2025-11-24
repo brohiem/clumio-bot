@@ -35,9 +35,14 @@ if slack_bot_token:
 
 
 # Shared helper functions for inventory and restore
-def get_inventory_data(inventory_type):
-    """Shared function to get inventory data"""
-    result = clumio_client.get_inventory(inventory_type)
+def get_inventory_data(inventory_type, account_native_id=None):
+    """Shared function to get inventory data
+    
+    Args:
+        inventory_type: Type of inventory ('s3' or 'ec2')
+        account_native_id: Optional AWS account ID
+    """
+    result = clumio_client.get_inventory(inventory_type, account_native_id=account_native_id)
     
     if inventory_type == 's3':
         parsed_result = []
@@ -131,11 +136,17 @@ def inventory():
     
     Required input:
     - type: 's3' or 'ec2'
+    
+    Optional input:
+    - account: AWS account ID (defaults to '761018876565' for backward compatibility)
     """
-    # Get type parameter from query string (GET) or JSON/form body (POST)
+    # Get type and account parameters from query string (GET) or JSON/form body (POST)
     slack_form_data = None
+    account_native_id = None
+    
     if request.method == 'GET':
         inventory_type = request.args.get('type')
+        account_native_id = request.args.get('account')
     else:
         # Handle both JSON and form-encoded POST requests (e.g., from Slack)
         # Slack sends application/x-www-form-urlencoded with properties like:
@@ -144,60 +155,77 @@ def inventory():
         
         # 1. Try query string first (works for all POST requests)
         inventory_type = request.args.get('type')
+        if not account_native_id:
+            account_native_id = request.args.get('account')
         
         # 2. Try JSON body
-        if not inventory_type:
+        if not inventory_type or not account_native_id:
             try:
                 json_data = request.get_json(silent=True, force=True)
                 if json_data and isinstance(json_data, dict):
-                    inventory_type = json_data.get('type')
+                    if not inventory_type:
+                        inventory_type = json_data.get('type')
+                    if not account_native_id:
+                        account_native_id = json_data.get('account')
             except Exception as e:
                 print(f"Error parsing JSON: {e}")
         
         # 3. Try form data (Slack sends form-encoded data)
         if request.form:
-            # Extract type from form data if present
+            # Extract type and account from form data if present
             if not inventory_type:
                 inventory_type = request.form.get('type')
+            if not account_native_id:
+                account_native_id = request.form.get('account')
             
-            # Parse the 'text' field from Slack (e.g., "type=s3 region=us-west-2")
+            # Parse the 'text' field from Slack (e.g., "type=s3 account=1234567890")
             slack_text = request.form.get('text', '')
-            if slack_text and not inventory_type:
-                # Parse text like "type=s3 region=us-west-2" or just "s3"
+            if slack_text:
                 slack_text = slack_text.strip()
                 
-                # First try parsing as key=value pairs
+                # Parse text like "type=s3 account=1234567890" or just "s3"
                 parts = slack_text.split()
                 for part in parts:
                     if '=' in part:
                         key, value = part.split('=', 1)
-                        if key.strip() == 'type':
-                            inventory_type = value.strip()
-                            break
+                        key = key.strip()
+                        value = value.strip()
+                        if key == 'type' and not inventory_type:
+                            inventory_type = value
+                        elif key == 'account' and not account_native_id:
+                            account_native_id = value
                 
                 # If no type found and text is just "s3" or "ec2", use it directly
                 if not inventory_type and slack_text in ['s3', 'ec2']:
                     inventory_type = slack_text
         
         # 4. Try values (for form data that might not be in request.form)
-        if not inventory_type and request.values:
-            inventory_type = request.values.get('type')
-            # Also try parsing text from values
-            if not inventory_type:
-                values_text = request.values.get('text', '')
-                if values_text:
-                    values_text = values_text.strip()
-                    if values_text in ['s3', 'ec2']:
-                        inventory_type = values_text
-                    else:
-                        # Try parsing key=value format
-                        parts = values_text.split()
-                        for part in parts:
-                            if '=' in part:
-                                key, value = part.split('=', 1)
-                                if key.strip() == 'type':
-                                    inventory_type = value.strip()
-                                    break
+        if not inventory_type or not account_native_id:
+            if request.values:
+                if not inventory_type:
+                    inventory_type = request.values.get('type')
+                if not account_native_id:
+                    account_native_id = request.values.get('account')
+                
+                # Also try parsing text from values
+                if not inventory_type or not account_native_id:
+                    values_text = request.values.get('text', '')
+                    if values_text:
+                        values_text = values_text.strip()
+                        if values_text in ['s3', 'ec2'] and not inventory_type:
+                            inventory_type = values_text
+                        else:
+                            # Try parsing key=value format
+                            parts = values_text.split()
+                            for part in parts:
+                                if '=' in part:
+                                    key, value = part.split('=', 1)
+                                    key = key.strip()
+                                    value = value.strip()
+                                    if key == 'type' and not inventory_type:
+                                        inventory_type = value
+                                    elif key == 'account' and not account_native_id:
+                                        account_native_id = value
     
     # Validate required parameter - default to 's3' if not provided (matches Slack command behavior)
     if not inventory_type:
@@ -214,10 +242,10 @@ def inventory():
     try:
         # Get inventory data using shared function
         if inventory_type == 's3':
-            parsed_result = get_inventory_data(inventory_type)
+            parsed_result = get_inventory_data(inventory_type, account_native_id=account_native_id)
         else:
             # For EC2 or other types, return the raw response
-            result = clumio_client.get_inventory(inventory_type)
+            result = clumio_client.get_inventory(inventory_type, account_native_id=account_native_id)
             parsed_result = result
         
         # Check if this is a Slack request (has Slack form data like token, team_id, etc.)
@@ -346,18 +374,30 @@ if slack_app:
         
         text = command.get("text", "").strip()
         
-        # Default to s3 if no type specified
-        if not text:
-            inventory_type = "s3"
-        else:
-            if "=" in text:
-                parts = text.split("=")
-                if len(parts) == 2 and parts[0].strip() == "type":
-                    inventory_type = parts[1].strip()
+        # Parse parameters from text (e.g., "type=s3 account=1234567890" or just "s3")
+        inventory_type = None
+        account_native_id = None
+        
+        if text:
+            # Parse key=value pairs
+            parts = text.split()
+            for part in parts:
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    key = key.strip()
+                    value = value.strip()
+                    if key == "type":
+                        inventory_type = value
+                    elif key == "account":
+                        account_native_id = value
                 else:
-                    inventory_type = text
-            else:
-                inventory_type = text
+                    # If no =, treat as type value
+                    if not inventory_type:
+                        inventory_type = part.strip()
+        
+        # Default to s3 if no type specified
+        if not inventory_type:
+            inventory_type = "s3"
         
         if inventory_type not in ["s3", "ec2"]:
             respond(
@@ -367,7 +407,7 @@ if slack_app:
             return
         
         try:
-            parsed_result = get_inventory_data(inventory_type)
+            parsed_result = get_inventory_data(inventory_type, account_native_id=account_native_id)
             slack_response = format_slack_inventory_response(parsed_result)
             respond(**slack_response)
         except Exception as e:

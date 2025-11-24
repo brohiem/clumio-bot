@@ -1,5 +1,7 @@
 import os
 import requests
+import json
+from urllib.parse import quote
 from typing import Optional, Dict, Any
 
 
@@ -67,18 +69,25 @@ class ClumioClient:
                 response=e.response
             )
     
-    def get_inventory(self, inventory_type: str) -> Dict[str, Any]:
+    def get_inventory(self, inventory_type: str, account_native_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Retrieve inventory data from Clumio API
         
         Args:
             inventory_type: Type of inventory ('s3' or 'ec2')
+            account_native_id: Optional AWS account ID (defaults to '761018876565' for backward compatibility)
             
         Returns:
             Inventory data from Clumio API
         """
         if inventory_type == 's3':
-            endpoint = '/datasources/protection-groups/s3-assets?filter={"account_native_id":{"$eq":"761018876565"}}'
+            # Use provided account_native_id or default to the hardcoded value for backward compatibility
+            account_id = account_native_id or '761018876565'
+            # Build and URL-encode the filter JSON
+            filter_dict = {"account_native_id": {"$eq": account_id}}
+            filter_json = json.dumps(filter_dict)
+            filter_encoded = quote(filter_json)
+            endpoint = f'/datasources/protection-groups/s3-assets?filter={filter_encoded}'
         elif inventory_type == 'ec2':
             endpoint = '/inventory/protected-items/aws/ec2'
         else:
