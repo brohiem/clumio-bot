@@ -93,7 +93,8 @@ def inventory():
     if request.method == 'GET':
         inventory_type = request.args.get('type')
     else:
-        data = request.get_json() or {}
+        # Use silent=True so non-JSON payloads (e.g., form-encoded) don't raise 415
+        data = request.get_json(silent=True) or {}
         inventory_type = data.get('type')
     
     # Validate required parameter
@@ -143,7 +144,8 @@ def restore():
         bucket_name = request.args.get('bucket-name')
         bucket_id = request.args.get('bucket-id')
     else:
-        data = request.get_json() or {}
+        # Allow non-JSON POST bodies without raising 415
+        data = request.get_json(silent=True) or {}
         restore_type = data.get('type')
         bucket_name = data.get('bucket-name')
         bucket_id = data.get('bucket-id')
