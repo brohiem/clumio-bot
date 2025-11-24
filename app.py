@@ -113,9 +113,6 @@ def inventory():
         
         # 3. Try form data (Slack sends form-encoded data)
         if request.form:
-            # Capture all form data that Slack sends
-            slack_form_data = dict(request.form)
-            
             # Extract type from form data if present
             if not inventory_type:
                 inventory_type = request.form.get('type')
@@ -123,7 +120,10 @@ def inventory():
             # Parse the 'text' field from Slack (e.g., "type=s3 region=us-west-2")
             slack_text = request.form.get('text', '')
             if slack_text and not inventory_type:
-                # Parse text like "type=s3 region=us-west-2"
+                # Parse text like "type=s3 region=us-west-2" or just "s3"
+                slack_text = slack_text.strip()
+                
+                # First try parsing as key=value pairs
                 parts = slack_text.split()
                 for part in parts:
                     if '=' in part:
@@ -131,36 +131,36 @@ def inventory():
                         if key.strip() == 'type':
                             inventory_type = value.strip()
                             break
+                
+                # If no type found and text is just "s3" or "ec2", use it directly
+                if not inventory_type and slack_text in ['s3', 'ec2']:
+                    inventory_type = slack_text
         
         # 4. Try values (for form data that might not be in request.form)
         if not inventory_type and request.values:
             inventory_type = request.values.get('type')
+            # Also try parsing text from values
+            if not inventory_type:
+                values_text = request.values.get('text', '')
+                if values_text:
+                    values_text = values_text.strip()
+                    if values_text in ['s3', 'ec2']:
+                        inventory_type = values_text
+                    else:
+                        # Try parsing key=value format
+                        parts = values_text.split()
+                        for part in parts:
+                            if '=' in part:
+                                key, value = part.split('=', 1)
+                                if key.strip() == 'type':
+                                    inventory_type = value.strip()
+                                    break
     
-    # Validate required parameter
+    # Validate required parameter - default to 's3' if not provided (matches Slack command behavior)
     if not inventory_type:
-        # Provide helpful error message with debugging info
-        try:
-            raw_data = request.get_data(as_text=True)
-        except:
-            raw_data = "Unable to read raw data"
-        
-        received_data = {
-            'method': request.method,
-            'has_json': request.is_json,
-            'form_keys': list(request.form.keys()) if request.form else [],
-            'form_values': dict(request.form) if request.form else {},
-            'args_keys': list(request.args.keys()),
-            'args_values': dict(request.args),
-            'values_keys': list(request.values.keys()) if request.values else [],
-            'values_dict': dict(request.values) if request.values else {},
-            'content_type': request.content_type,
-            'headers': {k: str(v) for k, v in request.headers.items() if k.lower() not in ['authorization', 'cookie']},
-            'raw_data_preview': raw_data[:500] if raw_data else None
-        }
-        return jsonify({
-            'error': 'Missing required parameter: type',
-            'received': received_data
-        }), 400
+        # Default to s3 if no type specified (for backward compatibility)
+        inventory_type = 's3'
+        print(f"Inventory endpoint: No type provided, defaulting to s3")
     
     # Validate type value
     if inventory_type not in ['s3', 'ec2']:
@@ -180,8 +180,14 @@ def inventory():
             return jsonify(result), 200
             
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Inventory error: {str(e)}")
+        print(error_trace)
         return jsonify({
-            'error': f'Failed to retrieve inventory: {str(e)}'
+            'error': f'Failed to retrieve inventory: {str(e)}',
+            'type': type(e).__name__,
+            'inventory_type_requested': inventory_type
         }), 500
 
 
