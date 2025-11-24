@@ -56,28 +56,71 @@ def get_inventory_data(inventory_type):
 
 
 def format_slack_inventory_response(parsed_result):
-    """Format inventory data for Slack"""
-    json_payload = json.dumps(parsed_result, indent=2)
+    """Format inventory data for Slack as a formatted list"""
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "Clumio S3 Inventory",
+                "emoji": True
+            }
+        },
+        {
+            "type": "divider"
+        }
+    ]
     
-    return {
-        "response_type": "ephemeral",
-        "blocks": [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": "Clumio S3Inventory",
-                    "emoji": True
-                }
-            },
-            {
+    # Format each item as a list entry
+    if isinstance(parsed_result, list) and len(parsed_result) > 0:
+        for idx, item in enumerate(parsed_result, 1):
+            # Build the text for each item
+            item_text = f"*{idx}. "
+            if isinstance(item, dict):
+                # Format dictionary items
+                parts = []
+                for key, value in item.items():
+                    # Convert kebab-case to readable format
+                    readable_key = key.replace('-', ' ').replace('_', ' ').title()
+                    parts.append(f"*{readable_key}:* {value}")
+                item_text += " | ".join(parts)
+            else:
+                item_text += str(item)
+            item_text += "*"
+            
+            blocks.append({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"```{json_payload}```"
+                    "text": item_text
                 }
+            })
+        
+        # Add summary
+        blocks.append({
+            "type": "divider"
+        })
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Total items:* {len(parsed_result)}"
             }
-        ]
+        })
+    else:
+        # If no items or unexpected format, show as JSON
+        json_payload = json.dumps(parsed_result, indent=2)
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"```{json_payload}```"
+            }
+        })
+    
+    return {
+        "response_type": "ephemeral",
+        "blocks": blocks
     }
 
 
@@ -172,12 +215,25 @@ def inventory():
         # Get inventory data using shared function
         if inventory_type == 's3':
             parsed_result = get_inventory_data(inventory_type)
-            # Return simple JSON array for REST API calls
-            return jsonify(parsed_result), 200
         else:
             # For EC2 or other types, return the raw response
             result = clumio_client.get_inventory(inventory_type)
-            return jsonify(result), 200
+            parsed_result = result
+        
+        # Check if this is a Slack request (has Slack form data like token, team_id, etc.)
+        is_slack_request = request.method == 'POST' and (
+            request.form.get('token') or 
+            request.form.get('team_id') or 
+            request.form.get('command')
+        )
+        
+        # If it's a Slack request, format the response for Slack
+        if is_slack_request:
+            slack_response = format_slack_inventory_response(parsed_result)
+            return jsonify(slack_response), 200
+        else:
+            # Return simple JSON array for REST API calls
+            return jsonify(parsed_result), 200
             
     except Exception as e:
         import traceback
