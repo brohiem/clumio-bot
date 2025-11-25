@@ -65,12 +65,18 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
     
     Args:
         parsed_result: The inventory data to format
-        account_native_id: Optional AWS account ID to display in header
+        account_native_id: Optional AWS account ID to display in header (masked for security)
     """
-    # Build header text with account number if provided
+    # Build header text with masked account number if provided
     header_text = "Clumio S3 Inventory"
     if account_native_id:
-        header_text = f"Clumio S3 Inventory for Account: {account_native_id}"
+        # Mask all but last 4 digits for security
+        account_str = str(account_native_id)
+        if len(account_str) > 4:
+            masked_account = '*' * (len(account_str) - 4) + account_str[-4:]
+        else:
+            masked_account = '*' * len(account_str)
+        header_text = f"Clumio S3 Inventory for Account: {masked_account}"
     
     blocks = [
         {
