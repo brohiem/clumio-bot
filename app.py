@@ -92,7 +92,7 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
         }
     ]
     
-    # Format each item as a list entry
+    # Format each item with action buttons
     if isinstance(parsed_result, list) and len(parsed_result) > 0:
         for idx, item in enumerate(parsed_result, 1):
             # Build the text for each item
@@ -109,6 +109,10 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
                 item_text += str(item)
             item_text += "*"
             
+            # Create value string with item data (JSON encoded for button value)
+            item_value = json.dumps(item) if isinstance(item, dict) else str(item)
+            
+            # Add section with item info
             blocks.append({
                 "type": "section",
                 "text": {
@@ -116,6 +120,31 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
                     "text": item_text
                 }
             })
+            
+            # Add action buttons for this item
+            blocks.append({
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Backup Now"},
+                        "action_id": "backup_now",
+                        "value": item_value
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Restore"},
+                        "action_id": "restore_asset",
+                        "value": item_value
+                    }
+                ]
+            })
+            
+            # Add divider between items
+            if idx < len(parsed_result):
+                blocks.append({
+                    "type": "divider"
+                })
         
         # Add summary
         blocks.append({
@@ -443,6 +472,63 @@ if slack_app:
         except Exception as e:
             respond(
                 text=f"Error retrieving inventory: {str(e)}",
+                response_type="ephemeral"
+            )
+    
+    # Slack button action handlers
+    @slack_app.action("backup_now")
+    def handle_backup_now(ack, body, respond):
+        """Handle Backup Now button click"""
+        ack()
+        
+        try:
+            # Parse the value from the button
+            value = body.get('actions', [{}])[0].get('value', '{}')
+            item_data = json.loads(value)
+            
+            bucket_id = item_data.get('bucket-id', '')
+            bucket_name = item_data.get('bucket-name', '')
+            
+            # Call backup API endpoint (you'll need to implement this)
+            # For now, just acknowledge the action
+            respond(
+                text=f"Backup initiated for bucket: {bucket_name} (ID: {bucket_id})",
+                response_type="ephemeral"
+            )
+        except Exception as e:
+            respond(
+                text=f"Error initiating backup: {str(e)}",
+                response_type="ephemeral"
+            )
+    
+    @slack_app.action("restore_asset")
+    def handle_restore_asset(ack, body, respond):
+        """Handle Restore button click"""
+        ack()
+        
+        try:
+            # Parse the value from the button
+            value = body.get('actions', [{}])[0].get('value', '{}')
+            item_data = json.loads(value)
+            
+            bucket_id = item_data.get('bucket-id', '')
+            bucket_name = item_data.get('bucket-name', '')
+            
+            # Call restore API endpoint
+            result = clumio_client.restore(
+                's3',
+                bucket_name=bucket_name,
+                bucket_id=bucket_id
+            )
+            
+            result_json = json.dumps(result, indent=2)
+            respond(
+                text=f"Restore initiated for bucket: {bucket_name}\n```{result_json}```",
+                response_type="ephemeral"
+            )
+        except Exception as e:
+            respond(
+                text=f"Error initiating restore: {str(e)}",
                 response_type="ephemeral"
             )
     
