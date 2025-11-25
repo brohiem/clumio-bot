@@ -60,14 +60,24 @@ def get_inventory_data(inventory_type, account_native_id=None):
         return result
 
 
-def format_slack_inventory_response(parsed_result):
-    """Format inventory data for Slack as a formatted list"""
+def format_slack_inventory_response(parsed_result, account_native_id=None):
+    """Format inventory data for Slack as a formatted list
+    
+    Args:
+        parsed_result: The inventory data to format
+        account_native_id: Optional AWS account ID to display in header
+    """
+    # Build header text with account number if provided
+    header_text = "Clumio S3 Inventory"
+    if account_native_id:
+        header_text = f"Clumio S3 Inventory for Account: {account_native_id}"
+    
     blocks = [
         {
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": "Clumio S3 Inventory",
+                "text": header_text,
                 "emoji": True
             }
         },
@@ -136,9 +146,7 @@ def inventory():
     
     Required input:
     - type: 's3' or 'ec2'
-    
-    Optional input:
-    - account: AWS account ID (defaults to '761018876565' for backward compatibility)
+    - account: AWS account ID (required for 's3' type, optional for 'ec2')
     """
     # Get type and account parameters from query string (GET) or JSON/form body (POST)
     slack_form_data = None
@@ -239,6 +247,14 @@ def inventory():
             'error': f'Invalid type value: {inventory_type}. Accepted values: s3, ec2'
         }), 400
     
+    # Validate account_native_id is provided for s3 type
+    if inventory_type == 's3' and not account_native_id:
+        return jsonify({
+            'error': 'Missing required parameter: account',
+            'detail': 'The account parameter (AWS account ID) is required for s3 inventory type',
+            'example': 'Use format: type=s3 account=1234567890 or ?type=s3&account=1234567890'
+        }), 400
+    
     try:
         # Get inventory data using shared function
         if inventory_type == 's3':
@@ -257,7 +273,7 @@ def inventory():
         
         # If it's a Slack request, format the response for Slack
         if is_slack_request:
-            slack_response = format_slack_inventory_response(parsed_result)
+            slack_response = format_slack_inventory_response(parsed_result, account_native_id=account_native_id)
             return jsonify(slack_response), 200
         else:
             # Return simple JSON array for REST API calls
@@ -406,9 +422,17 @@ if slack_app:
             )
             return
         
+        # Validate account_native_id is provided for s3 type
+        if inventory_type == "s3" and not account_native_id:
+            respond(
+                text="Error: Missing required parameter 'account'. Use format: /inventory type=s3 account=1234567890",
+                response_type="ephemeral"
+            )
+            return
+        
         try:
             parsed_result = get_inventory_data(inventory_type, account_native_id=account_native_id)
-            slack_response = format_slack_inventory_response(parsed_result)
+            slack_response = format_slack_inventory_response(parsed_result, account_native_id=account_native_id)
             respond(**slack_response)
         except Exception as e:
             respond(

@@ -75,16 +75,21 @@ class ClumioClient:
         
         Args:
             inventory_type: Type of inventory ('s3' or 'ec2')
-            account_native_id: Optional AWS account ID (defaults to '761018876565' for backward compatibility)
+            account_native_id: Required AWS account ID for 's3' type, optional for 'ec2'
             
         Returns:
             Inventory data from Clumio API
+            
+        Raises:
+            ValueError: If account_native_id is not provided for 's3' type
         """
         if inventory_type == 's3':
-            # Use provided account_native_id or default to the hardcoded value for backward compatibility
-            account_id = account_native_id or '761018876565'
+            # Require account_native_id for s3 type
+            if not account_native_id:
+                raise ValueError("account_native_id is required for s3 inventory type")
+            
             # Build and URL-encode the filter JSON
-            filter_dict = {"account_native_id": {"$eq": account_id}}
+            filter_dict = {"account_native_id": {"$eq": account_native_id}}
             filter_json = json.dumps(filter_dict)
             filter_encoded = quote(filter_json)
             endpoint = f'/datasources/protection-groups/s3-assets?filter={filter_encoded}'
