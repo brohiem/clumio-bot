@@ -760,7 +760,7 @@ if slack_app:
             )
     
     @slack_app.command("/restore")
-    def handle_restore_command(ack, body, client):
+    def handle_restore_command(ack, body, client, respond):
         """Handle /restore Slack command - opens modal for restore workflow"""
         ack()
         
@@ -778,7 +778,7 @@ if slack_app:
         
         # Open modal
         try:
-            client.views_open(
+            result = client.views_open(
                 trigger_id=body["trigger_id"],
                 view={
                     "type": "modal",
@@ -854,10 +854,18 @@ if slack_app:
                     })
                 }
             )
+            print(f"Modal opened successfully: {result}")
         except Exception as e:
             import traceback
-            print(f"Error opening restore modal: {str(e)}")
-            print(traceback.format_exc())
+            error_msg = str(e)
+            error_trace = traceback.format_exc()
+            print(f"Error opening restore modal: {error_msg}")
+            print(error_trace)
+            # Send error message to user
+            respond(
+                text=f"Error opening restore modal: {error_msg}\n\nPlease check the logs for details.",
+                response_type="ephemeral"
+            )
     
     @slack_app.options("bucket_selection")
     def handle_bucket_options(ack, body):
