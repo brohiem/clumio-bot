@@ -336,18 +336,30 @@ def restore():
     Optional inputs:
     - bucket-name: string value
     - bucket-id: numeric value (string format)
+    - object_key: S3 object key (optional)
     """
     # Get parameters from query string (GET) or JSON/form body (POST)
+    # Similar to /inventory endpoint - handle Slack's form-encoded POST requests
+    restore_type = None
+    bucket_name = None
+    bucket_id = None
+    object_key = None
+    
     if request.method == 'GET':
         restore_type = request.args.get('type')
         bucket_name = request.args.get('bucket-name')
         bucket_id = request.args.get('bucket-id')
+        object_key = request.args.get('object_key') or request.args.get('object-key')
     else:
         # Handle both JSON and form-encoded POST requests (e.g., from Slack)
-        # Try multiple methods to extract parameters
+        # Try multiple methods to extract parameters, similar to /inventory endpoint
+        # Priority: request.args -> request.get_json -> request.form -> request.values
+        
+        # Try query string first
         restore_type = request.args.get('type')
         bucket_name = request.args.get('bucket-name')
         bucket_id = request.args.get('bucket-id')
+        object_key = request.args.get('object_key') or request.args.get('object-key')
         
         # Try JSON body
         if not restore_type:
@@ -355,27 +367,35 @@ def restore():
                 data = request.get_json(silent=True, force=True)
                 if data and isinstance(data, dict):
                     restore_type = restore_type or data.get('type')
-                    bucket_name = bucket_name or data.get('bucket-name')
-                    bucket_id = bucket_id or data.get('bucket-id')
+                    bucket_name = bucket_name or data.get('bucket-name') or data.get('bucket_name')
+                    bucket_id = bucket_id or data.get('bucket-id') or data.get('bucket_id')
+                    object_key = object_key or data.get('object_key') or data.get('object-key')
             except:
                 pass
         
         # Try form data
         if request.form:
             restore_type = restore_type or request.form.get('type')
-            bucket_name = bucket_name or request.form.get('bucket-name')
-            bucket_id = bucket_id or request.form.get('bucket-id')
+            bucket_name = bucket_name or request.form.get('bucket-name') or request.form.get('bucket_name')
+            bucket_id = bucket_id or request.form.get('bucket-id') or request.form.get('bucket_id')
+            object_key = object_key or request.form.get('object_key') or request.form.get('object-key')
         
         # Try values (for form data that might not be in request.form)
         if request.values:
             restore_type = restore_type or request.values.get('type')
-            bucket_name = bucket_name or request.values.get('bucket-name')
-            bucket_id = bucket_id or request.values.get('bucket-id')
+            bucket_name = bucket_name or request.values.get('bucket-name') or request.values.get('bucket_name')
+            bucket_id = bucket_id or request.values.get('bucket-id') or request.values.get('bucket_id')
+            object_key = object_key or request.values.get('object_key') or request.values.get('object-key')
     
     # Validate required parameter
     if not restore_type:
         return jsonify({
-            'error': 'Missing required parameter: type'
+            'error': 'Missing required parameter: type',
+            'method': request.method,
+            'content_type': request.content_type,
+            'has_json': request.is_json if hasattr(request, 'is_json') else None,
+            'form_keys': list(request.form.keys()) if request.form else [],
+            'args_keys': list(request.args.keys()) if request.args else []
         }), 400
     
     # Validate type value
@@ -398,10 +418,14 @@ def restore():
         result = clumio_client.restore(
             restore_type,
             bucket_name=bucket_name,
-            bucket_id=bucket_id
+            bucket_id=bucket_id,
+            object_key=object_key
         )
         return jsonify(result), 200
     except Exception as e:
+        import traceback
+        print(f"Restore API error: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({
             'error': f'Failed to restore: {str(e)}'
         }), 500
