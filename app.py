@@ -444,6 +444,9 @@ def slack_interactive():
         # Parse the JSON payload
         payload_json = json.loads(payload_raw)
         
+        # Get response_url for async updates (Slack requires immediate ack, then async update)
+        response_url = payload_json.get('response_url')
+        
         # Log the full payload for debugging
         log_entry = {
             "path": "/interactive",
@@ -457,10 +460,8 @@ def slack_interactive():
         # Extract the action and value from the payload
         actions = payload_json.get('actions', [])
         if not actions:
-            return jsonify({
-                "response_type": "ephemeral",
-                "text": "Error: No actions found in payload"
-            }), 200
+            # Acknowledge immediately
+            return jsonify({}), 200
         
         # Get the value from the first action (button click)
         action_value = actions[0].get('value', '{}')
@@ -472,98 +473,125 @@ def slack_interactive():
             bucket_name = item_data.get('bucket-name', 'Unknown')
             bucket_id = item_data.get('bucket-id', '')
         except Exception as e:
-            return jsonify({
-                "response_type": "ephemeral",
-                "text": f"Error parsing button value: {str(e)}"
-            }), 200
+            # Acknowledge immediately, then send error via response_url
+            if response_url:
+                import requests
+                requests.post(response_url, json={
+                    "response_type": "ephemeral",
+                    "replace_original": True,
+                    "text": f"Error parsing button value: {str(e)}"
+                })
+            return jsonify({}), 200
         
         if not asset_id:
-            return jsonify({
-                "response_type": "ephemeral",
-                "text": "Error: No asset_id found in button value"
-            }), 200
+            # Acknowledge immediately, then send error via response_url
+            if response_url:
+                import requests
+                requests.post(response_url, json={
+                    "response_type": "ephemeral",
+                    "replace_original": True,
+                    "text": "Error: No asset_id found in button value"
+                })
+            return jsonify({}), 200
         
-        # Call Clumio API to get backups for this asset
-        try:
-            backup_data = clumio_client.get_s3_asset_backups(asset_id)
-            backups = backup_data.get('_embedded', {}).get('items', [])
-            
-            # Build response blocks
-            blocks = [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*Backup information for: {bucket_name}*"
+        # Acknowledge immediately (within 3 seconds)
+        # Then make API call and update via response_url
+        import requests
+        import threading
+        
+        def update_slack_message():
+            try:
+                backup_data = clumio_client.get_s3_asset_backups(asset_id)
+                backups = backup_data.get('_embedded', {}).get('items', [])
+                
+                # Build response blocks
+                blocks = [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Backup information for: {bucket_name}*"
+                        }
+                    },
+                    {
+                        "type": "divider"
                     }
-                },
-                {
-                    "type": "divider"
-                }
-            ]
-            
-            if backups:
-                # Show list of backups
-                for idx, backup in enumerate(backups[:10], 1):  # Limit to first 10 backups
-                    backup_id = backup.get('id', 'unknown')
-                    backup_time = backup.get('backup_timestamp', backup.get('created_at', 'unknown'))
-                    backup_status = backup.get('status', 'unknown')
+                ]
+                
+                if backups:
+                    # Show list of backups
+                    for idx, backup in enumerate(backups[:10], 1):  # Limit to first 10 backups
+                        backup_id = backup.get('id', 'unknown')
+                        backup_time = backup.get('backup_timestamp', backup.get('created_at', 'unknown'))
+                        backup_status = backup.get('status', 'unknown')
+                        
+                        blocks.append({
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*{idx}. Backup ID:* `{backup_id}`\n*Time:* {backup_time}\n*Status:* {backup_status}"
+                            }
+                        })
                     
+                    if len(backups) > 10:
+                        blocks.append({
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*... and {len(backups) - 10} more backups*"
+                            }
+                        })
+                    
+                    # Add full JSON as code block
+                    backup_json = json.dumps(backup_data, indent=2)
+                    blocks.append({
+                        "type": "divider"
+                    })
                     blocks.append({
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"*{idx}. Backup ID:* `{backup_id}`\n*Time:* {backup_time}\n*Status:* {backup_status}"
+                            "text": f"*Full API Response:*\n```{backup_json}```"
                         }
                     })
-                
-                if len(backups) > 10:
+                else:
                     blocks.append({
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"*... and {len(backups) - 10} more backups*"
+                            "text": f"No backups found for bucket: {bucket_name} (Asset ID: {asset_id})"
                         }
                     })
                 
-                # Add full JSON as code block
-                backup_json = json.dumps(backup_data, indent=2)
-                blocks.append({
-                    "type": "divider"
-                })
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*Full API Response:*\n```{backup_json}```"
-                    }
-                })
-            else:
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"No backups found for bucket: {bucket_name} (Asset ID: {asset_id})"
-                    }
-                })
-            
-            return jsonify({
-                "response_type": "ephemeral",
-                "replace_original": True,
-                "blocks": blocks
-            }), 200
-            
-        except Exception as e:
-            import traceback
-            error_trace = traceback.format_exc()
-            print(f"Error calling Clumio API: {str(e)}")
-            print(error_trace)
-            
-            return jsonify({
-                "response_type": "ephemeral",
-                "replace_original": True,
-                "text": f"Error retrieving backups: {str(e)}"
-            }), 200
+                # Update the message via response_url
+                if response_url:
+                    requests.post(response_url, json={
+                        "response_type": "ephemeral",
+                        "replace_original": True,
+                        "blocks": blocks
+                    })
+            except Exception as e:
+                import traceback
+                error_trace = traceback.format_exc()
+                print(f"Error calling Clumio API: {str(e)}")
+                print(error_trace)
+                
+                # Send error via response_url
+                if response_url:
+                    requests.post(response_url, json={
+                        "response_type": "ephemeral",
+                        "replace_original": True,
+                        "text": f"Error retrieving backups: {str(e)}"
+                    })
+        
+        # Start async update in background thread
+        if response_url:
+            thread = threading.Thread(target=update_slack_message)
+            thread.daemon = True
+            thread.start()
+        
+        # Return immediate acknowledgment
+        return jsonify({}), 200
             
     except Exception as e:
         import traceback
