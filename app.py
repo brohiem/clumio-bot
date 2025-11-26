@@ -462,6 +462,15 @@ def slack_interactive():
             }
         ]
         
+        log_entry = {
+            "path": "/interactive",
+            "method": request.method,
+            "content_type": request.content_type,
+            "form": parsed_form,
+            "payload": payload_json
+        }
+        print(f"Slack interactive payload: {json.dumps(log_entry, indent=2)}")
+        
         return jsonify({
             "response_type": "ephemeral",
             "replace_original": False,
