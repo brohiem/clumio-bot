@@ -410,6 +410,33 @@ def restore():
             bucket_name = bucket_name or request.form.get('bucket-name') or request.form.get('bucket_name')
             bucket_id = bucket_id or request.form.get('bucket-id') or request.form.get('bucket_id')
             object_key = object_key or request.form.get('object_key') or request.form.get('object-key')
+            
+            # Parse the 'text' field from Slack (e.g., "type=s3 account=761018876565" or "type=s3 bucket-name=mybucket")
+            slack_text = request.form.get('text', '')
+            if slack_text:
+                slack_text = slack_text.strip()
+                
+                # Parse text like "type=s3 account=1234567890" or "type=s3 bucket-name=mybucket"
+                parts = slack_text.split()
+                for part in parts:
+                    if '=' in part:
+                        key, value = part.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        if key == 'type' and not restore_type:
+                            restore_type = value
+                        elif key == 'bucket-name' and not bucket_name:
+                            bucket_name = value
+                        elif key == 'bucket-id' and not bucket_id:
+                            bucket_id = value
+                        elif key == 'object-key' and not object_key:
+                            object_key = value
+                        elif key == 'object_key' and not object_key:
+                            object_key = value
+                
+                # If no type found and text is just "s3" or "ec2", use it directly
+                if not restore_type and slack_text in ['s3', 'ec2']:
+                    restore_type = slack_text
         
         # Try values (for form data that might not be in request.form)
         if request.values:
@@ -417,6 +444,32 @@ def restore():
             bucket_name = bucket_name or request.values.get('bucket-name') or request.values.get('bucket_name')
             bucket_id = bucket_id or request.values.get('bucket-id') or request.values.get('bucket_id')
             object_key = object_key or request.values.get('object_key') or request.values.get('object-key')
+            
+            # Also try parsing text from values
+            if not restore_type or not bucket_name:
+                values_text = request.values.get('text', '')
+                if values_text:
+                    values_text = values_text.strip()
+                    if values_text in ['s3', 'ec2'] and not restore_type:
+                        restore_type = values_text
+                    else:
+                        # Try parsing key=value format
+                        parts = values_text.split()
+                        for part in parts:
+                            if '=' in part:
+                                key, value = part.split('=', 1)
+                                key = key.strip()
+                                value = value.strip()
+                                if key == 'type' and not restore_type:
+                                    restore_type = value
+                                elif key == 'bucket-name' and not bucket_name:
+                                    bucket_name = value
+                                elif key == 'bucket-id' and not bucket_id:
+                                    bucket_id = value
+                                elif key == 'object-key' and not object_key:
+                                    object_key = value
+                                elif key == 'object_key' and not object_key:
+                                    object_key = value
     
     # Log parsed parameters
     parsed_params = {
