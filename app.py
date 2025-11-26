@@ -422,10 +422,10 @@ def health():
 @app.route("/interactive", methods=["POST"])
 def slack_interactive():
     """
-    Temporary handler for Slack interactive components (buttons, menus, etc.)
+    Handler for Slack interactive components (buttons, menus, etc.)
     
-    Instead of delegating to Slack Bolt (which currently fails signature validation),
-    simply parse the incoming form payload and echo it back as JSON so we can inspect it.
+    Parses the button click payload, extracts asset_id from the button value,
+    and calls the Clumio API to get backup information.
     """
     try:
         form_data = request.form.to_dict(flat=False) if request.form else {}
@@ -435,33 +435,16 @@ def slack_interactive():
         } if form_data else {}
         
         payload_raw = parsed_form.get("payload")
-        payload_json = None
-        payload_text = "No payload provided."
+        if not payload_raw:
+            return jsonify({
+                "response_type": "ephemeral",
+                "text": "Error: No payload received"
+            }), 200
         
-        if payload_raw:
-            try:
-                payload_json = json.loads(payload_raw)
-                payload_text = json.dumps(payload_json, indent=2)
-            except Exception:
-                payload_text = payload_raw
+        # Parse the JSON payload
+        payload_json = json.loads(payload_raw)
         
-        blocks = [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Interactive payload received*"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"```{payload_text}```"
-                }
-            }
-        ]
-        
+        # Log the full payload for debugging
         log_entry = {
             "path": "/interactive",
             "method": request.method,
@@ -471,11 +454,117 @@ def slack_interactive():
         }
         print(f"Slack interactive payload: {json.dumps(log_entry, indent=2)}")
         
-        return jsonify({
-            "response_type": "ephemeral",
-            "replace_original": False,
-            "blocks": blocks
-        }), 200
+        # Extract the action and value from the payload
+        actions = payload_json.get('actions', [])
+        if not actions:
+            return jsonify({
+                "response_type": "ephemeral",
+                "text": "Error: No actions found in payload"
+            }), 200
+        
+        # Get the value from the first action (button click)
+        action_value = actions[0].get('value', '{}')
+        
+        # Parse the value JSON to get the asset_id
+        try:
+            item_data = json.loads(action_value)
+            asset_id = item_data.get('id', '')
+            bucket_name = item_data.get('bucket-name', 'Unknown')
+            bucket_id = item_data.get('bucket-id', '')
+        except Exception as e:
+            return jsonify({
+                "response_type": "ephemeral",
+                "text": f"Error parsing button value: {str(e)}"
+            }), 200
+        
+        if not asset_id:
+            return jsonify({
+                "response_type": "ephemeral",
+                "text": "Error: No asset_id found in button value"
+            }), 200
+        
+        # Call Clumio API to get backups for this asset
+        try:
+            backup_data = clumio_client.get_s3_asset_backups(asset_id)
+            backups = backup_data.get('_embedded', {}).get('items', [])
+            
+            # Build response blocks
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Backup information for: {bucket_name}*"
+                    }
+                },
+                {
+                    "type": "divider"
+                }
+            ]
+            
+            if backups:
+                # Show list of backups
+                for idx, backup in enumerate(backups[:10], 1):  # Limit to first 10 backups
+                    backup_id = backup.get('id', 'unknown')
+                    backup_time = backup.get('backup_timestamp', backup.get('created_at', 'unknown'))
+                    backup_status = backup.get('status', 'unknown')
+                    
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*{idx}. Backup ID:* `{backup_id}`\n*Time:* {backup_time}\n*Status:* {backup_status}"
+                        }
+                    })
+                
+                if len(backups) > 10:
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*... and {len(backups) - 10} more backups*"
+                        }
+                    })
+                
+                # Add full JSON as code block
+                backup_json = json.dumps(backup_data, indent=2)
+                blocks.append({
+                    "type": "divider"
+                })
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Full API Response:*\n```{backup_json}```"
+                    }
+                })
+            else:
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"No backups found for bucket: {bucket_name} (Asset ID: {asset_id})"
+                    }
+                })
+            
+            return jsonify({
+                "response_type": "ephemeral",
+                "replace_original": True,
+                "blocks": blocks
+            }), 200
+            
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            print(f"Error calling Clumio API: {str(e)}")
+            print(error_trace)
+            
+            return jsonify({
+                "response_type": "ephemeral",
+                "replace_original": True,
+                "text": f"Error retrieving backups: {str(e)}"
+            }), 200
+            
     except Exception as e:
         import traceback
         error_msg = str(e)
@@ -488,7 +577,10 @@ def slack_interactive():
         print(f"Content-Type: {request.content_type}")
         print(f"Request data available: {hasattr(request, 'get_data')}")
         print(traceback.format_exc())
-        return jsonify(error_details), 500
+        return jsonify({
+            "response_type": "ephemeral",
+            "text": f"Error processing request: {error_msg}"
+        }), 200
 
 
 # Slack command handlers
