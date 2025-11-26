@@ -135,13 +135,13 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
                         "text": {"type": "plain_text", "text": bucket_name},
                         "action_id": "view_bucket",
                         "value": item_value
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": f"Restore {bucket_name}"},
-                        "action_id": "restore_asset",
-                        "value": item_value
-                    }
+                    } # ,
+                    # {
+                    #     "type": "button",
+                    #     "text": {"type": "plain_text", "text": f"Restore {bucket_name}"},
+                    #     "action_id": "restore_asset",
+                    #     "value": item_value
+                    # }
                 ]
             })
             
@@ -417,6 +417,31 @@ def restore():
 def health():
     """Health check endpoint"""
     return jsonify({'status': 'ok'}), 200
+
+
+@app.route("/interactive", methods=["POST"])
+def slack_interactive():
+    """Handle Slack interactive components (buttons, menus, etc.)"""
+    if not slack_handler:
+        return jsonify({"error": "Slack not configured"}), 500
+    
+    try:
+        # Slack sends interactive payloads as form data; the Bolt handler
+        # already knows how to parse and route these, so delegate to it.
+        return slack_handler.handle(request)
+    except Exception as e:
+        import traceback
+        error_msg = str(e)
+        error_details = {
+            "error": error_msg,
+            "content_type": request.content_type,
+            "method": request.method
+        }
+        print(f"Slack interactive error: {error_msg}")
+        print(f"Content-Type: {request.content_type}")
+        print(f"Request data available: {hasattr(request, 'get_data')}")
+        print(traceback.format_exc())
+        return jsonify(error_details), 500
 
 
 # Slack command handlers
