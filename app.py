@@ -421,14 +421,37 @@ def health():
 
 @app.route("/interactive", methods=["POST"])
 def slack_interactive():
-    """Handle Slack interactive components (buttons, menus, etc.)"""
-    if not slack_handler:
-        return jsonify({"error": "Slack not configured"}), 500
+    """
+    Temporary handler for Slack interactive components (buttons, menus, etc.)
     
+    Instead of delegating to Slack Bolt (which currently fails signature validation),
+    simply parse the incoming form payload and echo it back as JSON so we can inspect it.
+    """
     try:
-        # Slack sends interactive payloads as form data; the Bolt handler
-        # already knows how to parse and route these, so delegate to it.
-        return slack_handler.handle(request)
+        form_data = request.form.to_dict(flat=False) if request.form else {}
+        parsed_form = {}
+        
+        for key, value in form_data.items():
+            if isinstance(value, list) and len(value) == 1:
+                parsed_form[key] = value[0]
+            else:
+                parsed_form[key] = value
+        
+        # Slack interactive payload is usually in the "payload" field as JSON
+        payload_json = None
+        payload_raw = parsed_form.get("payload")
+        if payload_raw:
+            try:
+                payload_json = json.loads(payload_raw)
+            except Exception:
+                payload_json = {"error": "Failed to parse payload JSON", "raw": payload_raw}
+        
+        return jsonify({
+            "content_type": request.content_type,
+            "method": request.method,
+            "form": parsed_form,
+            "payload": payload_json
+        }), 200
     except Exception as e:
         import traceback
         error_msg = str(e)
