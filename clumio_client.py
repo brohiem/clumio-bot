@@ -100,6 +100,24 @@ class ClumioClient:
         
         return self._make_request('GET', endpoint)
     
+    def get_s3_asset_backups(self, protection_group_s3_asset_id: str) -> Dict[str, Any]:
+        """
+        Retrieve backups for a specific S3 protection group asset.
+        
+        Args:
+            protection_group_s3_asset_id: The asset ID to filter backups on.
+        """
+        filter_dict = {
+            "protection_group_s3_asset_id": {
+                "$eq": protection_group_s3_asset_id
+            }
+        }
+        params = {
+            "filter": json.dumps(filter_dict)
+        }
+        endpoint = '/backups/protection-groups/s3-assets'
+        return self._make_request('GET', endpoint, params=params)
+    
     def restore(self, restore_type: str, bucket_name: Optional[str] = None, 
                bucket_id: Optional[str] = None) -> Dict[str, Any]:
         """

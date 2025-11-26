@@ -133,12 +133,12 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
                     {
                         "type": "button",
                         "text": {"type": "plain_text", "text": bucket_name},
-                        "action_id": "backup_now",
+                        "action_id": "view_bucket",
                         "value": item_value
                     },
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": bucket_name},
+                        "text": {"type": "plain_text", "text": f"Restore {bucket_name}"},
                         "action_id": "restore_asset",
                         "value": item_value
                     }
@@ -481,9 +481,9 @@ if slack_app:
             )
     
     # Slack button action handlers
-    @slack_app.action("backup_now")
-    def handle_backup_now(ack, body, respond):
-        """Handle Backup Now button click"""
+    @slack_app.action("view_bucket")
+    def handle_view_bucket(ack, body, respond):
+        """Handle View Bucket button click"""
         ack()
         
         try:
@@ -496,15 +496,47 @@ if slack_app:
             bucket_id = item_data.get('bucket-id', '')
             bucket_name = item_data.get('bucket-name', '')
             
-            # Call backup API endpoint (you'll need to implement this)
-            # For now, just acknowledge the action
-            respond(
-                text=f"Backup initiated for bucket: {bucket_name} (ID: {item_id}, Bucket ID: {bucket_id})",
-                response_type="ephemeral"
-            )
+            # Retrieve backup metadata for this bucket
+            backup_data = clumio_client.get_s3_asset_backups(item_id)
+            backups = backup_data.get('_embedded', {}).get('items', [])
+            if backups:
+                first_backup = backups[0]
+                backup_id = first_backup.get('id', 'unknown')
+                backup_time = first_backup.get('backup_timestamp', first_backup.get('created_at', 'unknown'))
+                detail_text = (
+                    f"*Bucket:* {bucket_name}\n"
+                    f"*Bucket ID:* {bucket_id or 'n/a'}\n"
+                    f"*Asset ID:* {item_id or 'n/a'}\n"
+                    f"*Latest Backup ID:* {backup_id}\n"
+                    f"*Backup Time:* {backup_time or 'n/a'}"
+                )
+                respond(
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": "*Latest backup details* :open_file_folder:"
+                            }
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": detail_text
+                            }
+                        }
+                    ],
+                    response_type="ephemeral"
+                )
+            else:
+                respond(
+                    text=f"No backups found for bucket: {bucket_name} (Asset ID: {item_id})",
+                    response_type="ephemeral"
+                )
         except Exception as e:
             respond(
-                text=f"Error initiating backup: {str(e)}",
+                text=f"Error retrieving bucket backups: {str(e)}",
                 response_type="ephemeral"
             )
     
