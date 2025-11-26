@@ -338,6 +338,37 @@ def restore():
     - bucket-id: numeric value (string format)
     - object_key: S3 object key (optional)
     """
+    # Log incoming request details
+    log_data = {
+        "path": "/restore",
+        "method": request.method,
+        "content_type": request.content_type,
+        "headers": dict(request.headers),
+        "args": dict(request.args),
+        "form": dict(request.form) if request.form else {},
+        "values": dict(request.values) if request.values else {},
+    }
+    
+    # Try to get JSON data
+    json_data = None
+    try:
+        json_data = request.get_json(silent=True, force=True)
+        if json_data:
+            log_data["json"] = json_data
+    except Exception as e:
+        log_data["json_error"] = str(e)
+    
+    # Try to get raw data preview
+    try:
+        raw_data = request.get_data(as_text=True)
+        if raw_data:
+            log_data["raw_data_preview"] = raw_data[:500]  # First 500 chars
+    except:
+        pass
+    
+    # Log the full payload
+    print(f"Restore endpoint - Full request payload: {json.dumps(log_data, indent=2, default=str)}")
+    
     # Get parameters from query string (GET) or JSON/form body (POST)
     # Similar to /inventory endpoint - handle Slack's form-encoded POST requests
     restore_type = None
@@ -387,31 +418,63 @@ def restore():
             bucket_id = bucket_id or request.values.get('bucket-id') or request.values.get('bucket_id')
             object_key = object_key or request.values.get('object_key') or request.values.get('object-key')
     
+    # Log parsed parameters
+    parsed_params = {
+        "restore_type": restore_type,
+        "bucket_name": bucket_name,
+        "bucket_id": bucket_id,
+        "object_key": object_key
+    }
+    print(f"Restore endpoint - Parsed parameters: {json.dumps(parsed_params, indent=2)}")
+    
     # Validate required parameter
     if not restore_type:
-        return jsonify({
+        error_response = {
             'error': 'Missing required parameter: type',
             'method': request.method,
             'content_type': request.content_type,
             'has_json': request.is_json if hasattr(request, 'is_json') else None,
             'form_keys': list(request.form.keys()) if request.form else [],
-            'args_keys': list(request.args.keys()) if request.args else []
-        }), 400
+            'form_values': {k: str(v)[:100] for k, v in request.form.items()} if request.form else {},
+            'args_keys': list(request.args.keys()) if request.args else [],
+            'args_values': dict(request.args) if request.args else {},
+            'values_keys': list(request.values.keys()) if request.values else [],
+            'values_dict': {k: str(v)[:100] for k, v in request.values.items()} if request.values else {},
+            'parsed_params': parsed_params
+        }
+        print(f"Restore endpoint - 400 error response: {json.dumps(error_response, indent=2)}")
+        return jsonify(error_response), 400
     
     # Validate type value
     if restore_type not in ['s3', 'ec2']:
-        return jsonify({
-            'error': f'Invalid type value: {restore_type}. Accepted values: s3, ec2'
-        }), 400
+        error_response = {
+            'error': f'Invalid type value: {restore_type}. Accepted values: s3, ec2',
+            'parsed_params': parsed_params
+        }
+        print(f"Restore endpoint - 400 error (invalid type): {json.dumps(error_response, indent=2)}")
+        return jsonify(error_response), 400
     
     # Validate bucket-id is numeric if provided
     if bucket_id is not None:
         try:
             int(bucket_id)
         except (ValueError, TypeError):
-            return jsonify({
-                'error': 'bucket-id must be a numeric value (string format)'
-            }), 400
+            error_response = {
+                'error': 'bucket-id must be a numeric value (string format)',
+                'bucket_id_received': bucket_id,
+                'parsed_params': parsed_params
+            }
+            print(f"Restore endpoint - 400 error (invalid bucket-id): {json.dumps(error_response, indent=2)}")
+            return jsonify(error_response), 400
+    
+    # Log API call parameters
+    api_params = {
+        "restore_type": restore_type,
+        "bucket_name": bucket_name,
+        "bucket_id": bucket_id,
+        "object_key": object_key
+    }
+    print(f"Restore endpoint - Calling Clumio API with: {json.dumps(api_params, indent=2)}")
     
     try:
         # Call Clumio API
@@ -421,13 +484,16 @@ def restore():
             bucket_id=bucket_id,
             object_key=object_key
         )
+        print(f"Restore endpoint - Clumio API success: {json.dumps(result, indent=2, default=str)[:500]}")
         return jsonify(result), 200
     except Exception as e:
         import traceback
-        print(f"Restore API error: {str(e)}")
-        print(traceback.format_exc())
+        error_trace = traceback.format_exc()
+        print(f"Restore endpoint - Clumio API error: {str(e)}")
+        print(f"Restore endpoint - Error traceback: {error_trace}")
         return jsonify({
-            'error': f'Failed to restore: {str(e)}'
+            'error': f'Failed to restore: {str(e)}',
+            'parsed_params': parsed_params
         }), 500
 
 
