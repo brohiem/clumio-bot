@@ -558,6 +558,7 @@ if slack_app:
                     f"*Latest Backup ID:* {backup_id}\n"
                     f"*Backup Time:* {backup_time or 'n/a'}"
                 )
+                backup_json = json.dumps(first_backup, indent=2)
                 respond(
                     blocks=[
                         {
@@ -573,18 +574,28 @@ if slack_app:
                                 "type": "mrkdwn",
                                 "text": detail_text
                             }
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"```{backup_json}```"
+                            }
                         }
                     ],
+                    replace_original=True,
                     response_type="ephemeral"
                 )
             else:
                 respond(
                     text=f"No backups found for bucket: {bucket_name} (Asset ID: {item_id})",
+                    replace_original=True,
                     response_type="ephemeral"
                 )
         except Exception as e:
             respond(
                 text=f"Error retrieving bucket backups: {str(e)}",
+                replace_original=True,
                 response_type="ephemeral"
             )
     
@@ -642,11 +653,13 @@ if slack_app:
                         }
                     }
                 ],
+                replace_original=True,
                 response_type="ephemeral"
             )
         except Exception as e:
             respond(
                 text=f"Error initiating restore: {str(e)}",
+                replace_original=True,
                 response_type="ephemeral"
             )
     
