@@ -49,7 +49,9 @@ def get_inventory_data(inventory_type, account_native_id=None):
         items = result.get('_embedded', {}).get('items', [])
         
         for item in items:
+            # Capture only the required fields: id, bucket_id, bucket_name
             parsed_item = {
+                'id': item.get('id', ''),
                 'bucket-id': item.get('bucket_id', ''),
                 'bucket-name': item.get('bucket_name', '')
             }
@@ -112,6 +114,9 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
             # Create value string with item data (JSON encoded for button value)
             item_value = json.dumps(item) if isinstance(item, dict) else str(item)
             
+            # Extract bucket name for button label
+            bucket_name = item.get('bucket-name', 'Unknown Bucket') if isinstance(item, dict) else 'Unknown'
+            
             # Add section with item info
             blocks.append({
                 "type": "section",
@@ -121,19 +126,19 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
                 }
             })
             
-            # Add action buttons for this item
+            # Add action buttons for this item - use bucket name as label
             blocks.append({
                 "type": "actions",
                 "elements": [
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": "Backup Now"},
+                        "text": {"type": "plain_text", "text": bucket_name},
                         "action_id": "backup_now",
                         "value": item_value
                     },
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": "Restore"},
+                        "text": {"type": "plain_text", "text": bucket_name},
                         "action_id": "restore_asset",
                         "value": item_value
                     }
@@ -486,13 +491,15 @@ if slack_app:
             value = body.get('actions', [{}])[0].get('value', '{}')
             item_data = json.loads(value)
             
+            # Extract the required fields: id, bucket_id, bucket_name
+            item_id = item_data.get('id', '')
             bucket_id = item_data.get('bucket-id', '')
             bucket_name = item_data.get('bucket-name', '')
             
             # Call backup API endpoint (you'll need to implement this)
             # For now, just acknowledge the action
             respond(
-                text=f"Backup initiated for bucket: {bucket_name} (ID: {bucket_id})",
+                text=f"Backup initiated for bucket: {bucket_name} (ID: {item_id}, Bucket ID: {bucket_id})",
                 response_type="ephemeral"
             )
         except Exception as e:
@@ -511,6 +518,8 @@ if slack_app:
             value = body.get('actions', [{}])[0].get('value', '{}')
             item_data = json.loads(value)
             
+            # Extract the required fields: id, bucket_id, bucket_name
+            item_id = item_data.get('id', '')
             bucket_id = item_data.get('bucket-id', '')
             bucket_name = item_data.get('bucket-name', '')
             
@@ -521,9 +530,38 @@ if slack_app:
                 bucket_id=bucket_id
             )
             
+            # Build response with the available information
+            detail_text = f"*ID:* {item_id}\n"
+            detail_text += f"*Bucket Name:* {bucket_name}\n"
+            if bucket_id:
+                detail_text += f"*Bucket ID:* {bucket_id}\n"
+            
             result_json = json.dumps(result, indent=2)
+            
             respond(
-                text=f"Restore initiated for bucket: {bucket_name}\n```{result_json}```",
+                blocks=[
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "*Restore initiated successfully* :rocket:"
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": detail_text
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"```{result_json}```"
+                        }
+                    }
+                ],
                 response_type="ephemeral"
             )
         except Exception as e:
