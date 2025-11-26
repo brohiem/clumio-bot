@@ -118,8 +118,55 @@ class ClumioClient:
         endpoint = '/backups/protection-groups/s3-assets'
         return self._make_request('GET', endpoint, params=params)
     
+    def get_s3_buckets_for_restore(self, account_native_id: str) -> Dict[str, Any]:
+        """
+        Get list of S3 buckets available for restore.
+        
+        Args:
+            account_native_id: AWS account ID
+            
+        Returns:
+            List of buckets with id, bucket_name, bucket_id
+        """
+        return self.get_inventory('s3', account_native_id=account_native_id)
+    
+    def get_s3_bucket_objects(self, protection_group_s3_asset_id: str, 
+                              backup_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get list of objects in an S3 bucket from backups.
+        
+        Args:
+            protection_group_s3_asset_id: The protection group S3 asset ID
+            backup_id: Optional backup ID to filter objects from specific backup
+            
+        Returns:
+            List of objects in the bucket
+        """
+        # First get backups for this asset
+        backups_data = self.get_s3_asset_backups(protection_group_s3_asset_id)
+        backups = backups_data.get('_embedded', {}).get('items', [])
+        
+        if not backups:
+            return {'_embedded': {'items': []}}
+        
+        # Use the latest backup if no backup_id specified
+        if not backup_id:
+            latest_backup = backups[0]
+            backup_id = latest_backup.get('id')
+        
+        # Get objects from the backup
+        # Note: This endpoint may vary based on Clumio API - adjust as needed
+        filter_dict = {
+            "backup_id": {"$eq": backup_id}
+        }
+        params = {
+            "filter": json.dumps(filter_dict)
+        }
+        endpoint = '/backups/protection-groups/s3-assets/objects'
+        return self._make_request('GET', endpoint, params=params)
+    
     def restore(self, restore_type: str, bucket_name: Optional[str] = None, 
-               bucket_id: Optional[str] = None) -> Dict[str, Any]:
+               bucket_id: Optional[str] = None, object_key: Optional[str] = None) -> Dict[str, Any]:
         """
         Restore data from Clumio API
         
@@ -127,6 +174,7 @@ class ClumioClient:
             restore_type: Type of restore ('s3' or 'ec2')
             bucket_name: Optional bucket name (string)
             bucket_id: Optional bucket ID (numeric string)
+            object_key: Optional S3 object key to restore
             
         Returns:
             Restore response from Clumio API
@@ -139,6 +187,9 @@ class ClumioClient:
         
         if bucket_id:
             data['bucket_id'] = int(bucket_id) if bucket_id.isdigit() else bucket_id
+        
+        if object_key:
+            data['object_key'] = object_key
         
         if restore_type == 's3':
             endpoint = '/restore/aws/s3'

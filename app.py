@@ -135,13 +135,7 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
                         "text": {"type": "plain_text", "text": "View " + bucket_name},
                         "action_id": "view_bucket",
                         "value": item_value
-                    } # ,
-                    # {
-                    #     "type": "button",
-                    #     "text": {"type": "plain_text", "text": f"Restore {bucket_name}"},
-                    #     "action_id": "restore_asset",
-                    #     "value": item_value
-                    # }
+                    }
                 ]
             })
             
@@ -419,13 +413,27 @@ def health():
     return jsonify({'status': 'ok'}), 200
 
 
+@app.route('/slack/options', methods=['POST'])
+def slack_options():
+    """Handle external_select options requests from Slack"""
+    if slack_handler:
+        try:
+            return slack_handler.handle(request)
+        except Exception as e:
+            import traceback
+            print(f"Slack options handler error: {str(e)}")
+            print(traceback.format_exc())
+            return jsonify({'options': []}), 200
+    
+    return jsonify({'options': []}), 200
+
+
 @app.route("/interactive", methods=["POST"])
 def slack_interactive():
     """
     Handler for Slack interactive components (buttons, menus, etc.)
     
-    Parses the button click payload, extracts asset_id from the button value,
-    and calls the Clumio API to get backup information.
+    Handles button clicks manually to ensure proper response format.
     """
     try:
         form_data = request.form.to_dict(flat=False) if request.form else {}
@@ -494,7 +502,7 @@ def slack_interactive():
                 })
             return jsonify({}), 200
         
-        # Acknowledge immediately (within 3 seconds)
+        # Acknowledge immediately (required by Slack within 3 seconds)
         # Then make API call and update via response_url
         import requests
         import threading
@@ -565,11 +573,16 @@ def slack_interactive():
                 
                 # Update the message via response_url
                 if response_url:
-                    requests.post(response_url, json={
+                    update_response = requests.post(response_url, json={
                         "response_type": "ephemeral",
                         "replace_original": True,
                         "blocks": blocks
                     })
+                    print(f"Posted to response_url, status: {update_response.status_code}")
+                    print(f"Response: {update_response.text}")
+                else:
+                    print("No response_url available")
+                    
             except Exception as e:
                 import traceback
                 error_trace = traceback.format_exc()
@@ -589,8 +602,11 @@ def slack_interactive():
             thread = threading.Thread(target=update_slack_message)
             thread.daemon = True
             thread.start()
+            print(f"Started background thread to update Slack message via response_url")
+        else:
+            print("Warning: No response_url in payload, cannot update message")
         
-        # Return immediate acknowledgment
+        # Return immediate acknowledgment (empty response)
         return jsonify({}), 200
             
     except Exception as e:
@@ -743,151 +759,465 @@ if slack_app:
                 response_type="ephemeral"
             )
     
-    @slack_app.action("restore_asset")
-    def handle_restore_asset(ack, body, respond):
-        """Handle Restore button click"""
+    @slack_app.command("/restore")
+    def handle_restore_command(ack, body, client):
+        """Handle /restore Slack command - opens modal for restore workflow"""
+        ack()
+        
+        text = body.get("text", "").strip()
+        
+        # Parse account from command text if provided
+        account_native_id = None
+        if text:
+            parts = text.split()
+            for part in parts:
+                if "=" in part:
+                    key, value = part.split("=", 1)
+                    if key.strip() == "account":
+                        account_native_id = value.strip()
+        
+        # Open modal
+        try:
+            client.views_open(
+                trigger_id=body["trigger_id"],
+                view={
+                    "type": "modal",
+                    "callback_id": "restore_modal",
+                    "title": {
+                        "type": "plain_text",
+                        "text": "Restore from Clumio"
+                    },
+                    "submit": {
+                        "type": "plain_text",
+                        "text": "Restore"
+                    },
+                    "close": {
+                        "type": "plain_text",
+                        "text": "Cancel"
+                    },
+                    "blocks": [
+                        {
+                            "type": "input",
+                            "block_id": "account_input",
+                            "element": {
+                                "type": "plain_text_input",
+                                "action_id": "account_value",
+                                "placeholder": {
+                                    "type": "plain_text",
+                                    "text": "Enter AWS Account ID (e.g., 1234567890)"
+                                },
+                                "initial_value": account_native_id or ""
+                            },
+                            "label": {
+                                "type": "plain_text",
+                                "text": "AWS Account ID"
+                            }
+                        },
+                        {
+                            "type": "input",
+                            "block_id": "bucket_select",
+                            "element": {
+                                "type": "external_select",
+                                "action_id": "bucket_selection",
+                                "placeholder": {
+                                    "type": "plain_text",
+                                    "text": "Select a bucket..."
+                                },
+                                "min_query_length": 0
+                            },
+                            "label": {
+                                "type": "plain_text",
+                                "text": "Select Bucket"
+                            }
+                        },
+                        {
+                            "type": "input",
+                            "block_id": "object_select",
+                            "element": {
+                                "type": "external_select",
+                                "action_id": "object_selection",
+                                "placeholder": {
+                                    "type": "plain_text",
+                                    "text": "Select a file/object..."
+                                },
+                                "min_query_length": 0
+                            },
+                            "label": {
+                                "type": "plain_text",
+                                "text": "Select File/Object"
+                            },
+                            "optional": True
+                        }
+                    ],
+                    "private_metadata": json.dumps({
+                        "account_native_id": account_native_id or ""
+                    })
+                }
+            )
+        except Exception as e:
+            import traceback
+            print(f"Error opening restore modal: {str(e)}")
+            print(traceback.format_exc())
+    
+    @slack_app.options("bucket_selection")
+    def handle_bucket_options(ack, body):
+        """Handle external_select options request for bucket selection"""
+        try:
+            query = body.get("value", "").strip()
+            account_native_id = None
+            
+            # Try to get account from private_metadata if available
+            view = body.get("view", {})
+            private_metadata = view.get("private_metadata", "{}")
+            try:
+                metadata = json.loads(private_metadata)
+                account_native_id = metadata.get("account_native_id", "")
+            except:
+                pass
+            
+            # If no account in metadata, try to get from user input
+            if not account_native_id and view:
+                state_values = view.get("state", {}).get("values", {})
+                account_input = state_values.get("account_input", {})
+                account_value = account_input.get("account_value", {})
+                account_native_id = account_value.get("value", "")
+            
+            if not account_native_id:
+                ack(options=[
+                    {
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Please enter AWS Account ID first"
+                        },
+                        "value": "no_account"
+                    }
+                ])
+                return
+            
+            # Get buckets from Clumio API
+            buckets_data = clumio_client.get_s3_buckets_for_restore(account_native_id)
+            buckets = buckets_data.get('_embedded', {}).get('items', [])
+            
+            options = []
+            for bucket in buckets:
+                bucket_name = bucket.get('bucket_name', '')
+                bucket_id = bucket.get('bucket_id', '')
+                asset_id = bucket.get('id', '')
+                
+                if query and query.lower() not in bucket_name.lower():
+                    continue
+                
+                options.append({
+                    "text": {
+                        "type": "plain_text",
+                        "text": bucket_name
+                    },
+                    "value": json.dumps({
+                        "id": asset_id,
+                        "bucket_id": bucket_id,
+                        "bucket_name": bucket_name
+                    })
+                })
+            
+            if not options:
+                options.append({
+                    "text": {
+                        "type": "plain_text",
+                        "text": "No buckets found"
+                    },
+                    "value": "no_buckets"
+                })
+            
+            ack(options=options[:100])  # Limit to 100 options
+        except Exception as e:
+            import traceback
+            print(f"Error in bucket options: {str(e)}")
+            print(traceback.format_exc())
+            ack(options=[{
+                "text": {
+                    "type": "plain_text",
+                    "text": f"Error: {str(e)}"
+                },
+                "value": "error"
+            }])
+    
+    @slack_app.action("bucket_selection")
+    def handle_bucket_selection(ack, body, client):
+        """Handle bucket selection - update modal with objects"""
         ack()
         
         try:
-            # Parse the value from the button
-            value = body.get('actions', [{}])[0].get('value', '{}')
-            item_data = json.loads(value)
+            view = body.get("view", {})
+            view_id = view.get("id")
+            selected_bucket = body.get("actions", [{}])[0].get("selected_option", {}).get("value", "{}")
+            bucket_data = json.loads(selected_bucket)
+            asset_id = bucket_data.get("id")
             
-            # Extract the required fields: id, bucket_id, bucket_name
-            item_id = item_data.get('id', '')
-            bucket_id = item_data.get('bucket-id', '')
-            bucket_name = item_data.get('bucket-name', '')
+            # Get objects from the selected bucket
+            objects_data = clumio_client.get_s3_bucket_objects(asset_id)
+            objects = objects_data.get('_embedded', {}).get('items', [])
             
-            # Call restore API endpoint
+            # Update the object select block
+            object_block = {
+                "type": "input",
+                "block_id": "object_select",
+                "element": {
+                    "type": "external_select",
+                    "action_id": "object_selection",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Select a file/object..."
+                    },
+                    "min_query_length": 0
+                },
+                "label": {
+                    "type": "plain_text",
+                    "text": "Select File/Object"
+                },
+                "optional": True
+            }
+            
+            # If objects list is small enough, use static_select instead
+            if len(objects) <= 100:
+                object_block["element"] = {
+                    "type": "static_select",
+                    "action_id": "object_selection",
+                    "placeholder": {
+                        "type": "plain_text",
+                        "text": "Select a file/object..."
+                    },
+                    "options": [
+                        {
+                            "text": {
+                                "type": "plain_text",
+                                "text": obj.get("key", obj.get("name", "Unknown"))
+                            },
+                            "value": json.dumps({
+                                "key": obj.get("key", obj.get("name", "")),
+                                "backup_id": obj.get("backup_id", "")
+                            })
+                        }
+                        for obj in objects[:100]
+                    ]
+                }
+            
+            # Update the view
+            client.views_update(
+                view_id=view_id,
+                view={
+                    "type": "modal",
+                    "callback_id": "restore_modal",
+                    "title": {
+                        "type": "plain_text",
+                        "text": "Restore from Clumio"
+                    },
+                    "submit": {
+                        "type": "plain_text",
+                        "text": "Restore"
+                    },
+                    "close": {
+                        "type": "plain_text",
+                        "text": "Cancel"
+                    },
+                    "blocks": view.get("blocks", [])[:2] + [object_block],  # Keep account and bucket, update object
+                    "private_metadata": view.get("private_metadata", "{}")
+                }
+            )
+        except Exception as e:
+            import traceback
+            print(f"Error updating modal with objects: {str(e)}")
+            print(traceback.format_exc())
+    
+    @slack_app.options("object_selection")
+    def handle_object_options(ack, body):
+        """Handle external_select options request for object selection"""
+        try:
+            query = body.get("value", "").strip()
+            view = body.get("view", {})
+            state_values = view.get("state", {}).get("values", {})
+            
+            # Get selected bucket
+            bucket_select = state_values.get("bucket_select", {})
+            bucket_selection = bucket_select.get("bucket_selection", {})
+            selected_bucket = bucket_selection.get("selected_option", {}).get("value")
+            
+            if not selected_bucket:
+                ack(options=[
+                    {
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Please select a bucket first"
+                        },
+                        "value": "no_bucket"
+                    }
+                ])
+                return
+            
+            try:
+                bucket_data = json.loads(selected_bucket)
+                asset_id = bucket_data.get("id")
+            except:
+                ack(options=[
+                    {
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Invalid bucket selection"
+                        },
+                        "value": "invalid_bucket"
+                    }
+                ])
+                return
+            
+            # Get objects from Clumio API
+            objects_data = clumio_client.get_s3_bucket_objects(asset_id)
+            objects = objects_data.get('_embedded', {}).get('items', [])
+            
+            options = []
+            for obj in objects:
+                obj_key = obj.get("key", obj.get("name", ""))
+                
+                if query and query.lower() not in obj_key.lower():
+                    continue
+                
+                options.append({
+                    "text": {
+                        "type": "plain_text",
+                        "text": obj_key
+                    },
+                    "value": json.dumps({
+                        "key": obj_key,
+                        "backup_id": obj.get("backup_id", "")
+                    })
+                })
+            
+            if not options:
+                options.append({
+                    "text": {
+                        "type": "plain_text",
+                        "text": "No objects found"
+                    },
+                    "value": "no_objects"
+                })
+            
+            ack(options=options[:100])  # Limit to 100 options
+        except Exception as e:
+            import traceback
+            print(f"Error in object options: {str(e)}")
+            print(traceback.format_exc())
+            ack(options=[{
+                "text": {
+                    "type": "plain_text",
+                    "text": f"Error: {str(e)}"
+                },
+                "value": "error"
+            }])
+    
+    @slack_app.view("restore_modal")
+    def handle_restore_submission(ack, body, client, view):
+        """Handle modal submission - perform restore"""
+        ack()
+        
+        try:
+            state_values = view.get("state", {}).get("values", {})
+            
+            # Get account ID
+            account_input = state_values.get("account_input", {})
+            account_value = account_input.get("account_value", {})
+            account_native_id = account_value.get("value", "")
+            
+            if not account_native_id:
+                client.views_update(
+                    view_id=body["view"]["id"],
+                    view={
+                        "type": "modal",
+                        "title": {
+                            "type": "plain_text",
+                            "text": "Error"
+                        },
+                        "blocks": [
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": "❌ Error: AWS Account ID is required"
+                                }
+                            }
+                        ]
+                    }
+                )
+                return
+            
+            # Get selected bucket
+            bucket_select = state_values.get("bucket_select", {})
+            bucket_selection = bucket_select.get("bucket_selection", {})
+            selected_bucket = bucket_selection.get("selected_option", {}).get("value", "{}")
+            bucket_data = json.loads(selected_bucket)
+            bucket_name = bucket_data.get("bucket_name", "")
+            bucket_id = bucket_data.get("bucket_id", "")
+            
+            # Get selected object (optional)
+            object_key = None
+            object_select = state_values.get("object_select", {})
+            if object_select:
+                object_selection = object_select.get("object_selection", {})
+                selected_object = object_selection.get("selected_option", {}).get("value")
+                if selected_object:
+                    object_data = json.loads(selected_object)
+                    object_key = object_data.get("key", "")
+            
+            # Call restore API
             result = clumio_client.restore(
                 's3',
                 bucket_name=bucket_name,
-                bucket_id=bucket_id
+                bucket_id=str(bucket_id) if bucket_id else None,
+                object_key=object_key
             )
             
-            # Build response with the available information
-            detail_text = f"*ID:* {item_id}\n"
-            detail_text += f"*Bucket Name:* {bucket_name}\n"
-            if bucket_id:
-                detail_text += f"*Bucket ID:* {bucket_id}\n"
-            
-            result_json = json.dumps(result, indent=2)
-            
-            respond(
-                blocks=[
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": "*Restore initiated successfully* :rocket:"
-                        }
+            # Show success message
+            client.views_update(
+                view_id=body["view"]["id"],
+                view={
+                    "type": "modal",
+                    "title": {
+                        "type": "plain_text",
+                        "text": "Restore Successful"
                     },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": detail_text
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"✅ *Restore initiated successfully!*\n\n*Bucket:* {bucket_name}\n*Object:* {object_key or 'Entire bucket'}\n\n*Response:*\n```{json.dumps(result, indent=2)}```"
+                            }
                         }
-                    },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"```{result_json}```"
-                        }
-                    }
-                ],
-                replace_original=True,
-                response_type="ephemeral"
+                    ]
+                }
             )
         except Exception as e:
-            respond(
-                text=f"Error initiating restore: {str(e)}",
-                replace_original=True,
-                response_type="ephemeral"
-            )
-    
-    @slack_app.command("/restore")
-    def handle_restore_command(ack, respond, command):
-        """Handle /restore Slack command"""
-        # Acknowledge immediately to satisfy Slack's 3-second requirement
-        # This must be the first thing we do
-        ack()
-        
-        text = command.get("text", "").strip()
-        
-        if not text:
-            respond(
-                text="Usage: /restore type=s3 [bucket-name=name] [bucket-id=id]",
-                response_type="ephemeral"
-            )
-            return
-        
-        # Parse parameters
-        params = {}
-        parts = text.split()
-        
-        for part in parts:
-            if "=" in part:
-                key, value = part.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-                
-                if key == "type":
-                    params["type"] = value
-                elif key == "bucket-name":
-                    params["bucket-name"] = value
-                elif key == "bucket-id":
-                    params["bucket-id"] = value
-        
-        if "type" not in params:
-            respond(
-                text="Missing required parameter: type",
-                response_type="ephemeral"
-            )
-            return
-        
-        if params["type"] not in ["s3", "ec2"]:
-            respond(
-                text=f"Invalid type: {params['type']}. Accepted values: s3, ec2",
-                response_type="ephemeral"
-            )
-            return
-        
-        try:
-            result = clumio_client.restore(
-                params["type"],
-                bucket_name=params.get("bucket-name"),
-                bucket_id=params.get("bucket-id")
-            )
+            import traceback
+            error_msg = str(e)
+            print(f"Error in restore submission: {error_msg}")
+            print(traceback.format_exc())
             
-            result_json = json.dumps(result, indent=2)
-            slack_response = {
-                "response_type": "ephemeral",
-                "blocks": [
-                    {
-                        "type": "header",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "Clumio Restore",
-                            "emoji": True
-                        }
+            # Show error message
+            client.views_update(
+                view_id=body["view"]["id"],
+                view={
+                    "type": "modal",
+                    "title": {
+                        "type": "plain_text",
+                        "text": "Restore Error"
                     },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"```{result_json}```"
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"❌ *Error:* {error_msg}"
+                            }
                         }
-                    }
-                ]
-            }
-            
-            respond(**slack_response)
-        except Exception as e:
-            respond(
-                text=f"Error calling restore: {str(e)}",
-                response_type="ephemeral"
+                    ]
+                }
             )
     
     # Slack Events API endpoint
