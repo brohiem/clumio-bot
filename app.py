@@ -406,6 +406,7 @@ def restore():
         
         # Try form data
         if request.form:
+            print(f"Restore endpoint - Form data found: {dict(request.form)}")
             restore_type = restore_type or request.form.get('type')
             bucket_name = bucket_name or request.form.get('bucket-name') or request.form.get('bucket_name')
             bucket_id = bucket_id or request.form.get('bucket-id') or request.form.get('bucket_id')
@@ -413,18 +414,23 @@ def restore():
             
             # Parse the 'text' field from Slack (e.g., "type=s3 account=761018876565" or "type=s3 bucket-name=mybucket")
             slack_text = request.form.get('text', '')
+            print(f"Restore endpoint - Slack text field: '{slack_text}'")
             if slack_text:
                 slack_text = slack_text.strip()
+                print(f"Restore endpoint - Parsing slack_text: '{slack_text}'")
                 
                 # Parse text like "type=s3 account=1234567890" or "type=s3 bucket-name=mybucket"
                 parts = slack_text.split()
+                print(f"Restore endpoint - Split parts: {parts}")
                 for part in parts:
                     if '=' in part:
                         key, value = part.split('=', 1)
                         key = key.strip()
                         value = value.strip()
+                        print(f"Restore endpoint - Parsed key='{key}', value='{value}', current restore_type='{restore_type}'")
                         if key == 'type' and not restore_type:
                             restore_type = value
+                            print(f"Restore endpoint - Set restore_type to '{value}'")
                         elif key == 'bucket-name' and not bucket_name:
                             bucket_name = value
                         elif key == 'bucket-id' and not bucket_id:
@@ -437,6 +443,9 @@ def restore():
                 # If no type found and text is just "s3" or "ec2", use it directly
                 if not restore_type and slack_text in ['s3', 'ec2']:
                     restore_type = slack_text
+                    print(f"Restore endpoint - Set restore_type to '{slack_text}' (direct match)")
+        else:
+            print("Restore endpoint - No form data found")
         
         # Try values (for form data that might not be in request.form)
         if request.values:
