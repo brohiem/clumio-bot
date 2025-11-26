@@ -132,7 +132,7 @@ def format_slack_inventory_response(parsed_result, account_native_id=None):
                 "elements": [
                     {
                         "type": "button",
-                        "text": {"type": "plain_text", "text": bucket_name},
+                        "text": {"type": "plain_text", "text": "View " + bucket_name},
                         "action_id": "view_bucket",
                         "value": item_value
                     } # ,
@@ -429,28 +429,43 @@ def slack_interactive():
     """
     try:
         form_data = request.form.to_dict(flat=False) if request.form else {}
-        parsed_form = {}
+        parsed_form = {
+            key: (value[0] if isinstance(value, list) and len(value) == 1 else value)
+            for key, value in form_data.items()
+        } if form_data else {}
         
-        for key, value in form_data.items():
-            if isinstance(value, list) and len(value) == 1:
-                parsed_form[key] = value[0]
-            else:
-                parsed_form[key] = value
-        
-        # Slack interactive payload is usually in the "payload" field as JSON
-        payload_json = None
         payload_raw = parsed_form.get("payload")
+        payload_json = None
+        payload_text = "No payload provided."
+        
         if payload_raw:
             try:
                 payload_json = json.loads(payload_raw)
+                payload_text = json.dumps(payload_json, indent=2)
             except Exception:
-                payload_json = {"error": "Failed to parse payload JSON", "raw": payload_raw}
+                payload_text = payload_raw
+        
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Interactive payload received*"
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"```{payload_text}```"
+                }
+            }
+        ]
         
         return jsonify({
-            "content_type": request.content_type,
-            "method": request.method,
-            "form": parsed_form,
-            "payload": payload_json
+            "response_type": "ephemeral",
+            "replace_original": False,
+            "blocks": blocks
         }), 200
     except Exception as e:
         import traceback
