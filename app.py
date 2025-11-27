@@ -623,10 +623,137 @@ def slack_interactive():
             # Acknowledge immediately
             return jsonify({}), 200
         
-        # Get the value from the first action (button click)
+        # Get action_id to determine what to do
+        action_id = actions[0].get('action_id', '')
         action_value = actions[0].get('value', '{}')
+        trigger_id = payload_json.get('trigger_id')
         
-        # Parse the value JSON to get the asset_id
+        # Handle view_bucket action - open modal
+        if action_id == 'view_bucket' and trigger_id:
+            try:
+                # Parse the value JSON to get the bucket info
+                item_data = json.loads(action_value)
+                item_id = item_data.get('id', '')
+                bucket_id = item_data.get('bucket-id', '')
+                bucket_name = item_data.get('bucket-name', '')
+                
+                # Retrieve backup metadata for this bucket
+                backup_data = clumio_client.get_s3_asset_backups(item_id)
+                backups = backup_data.get('_embedded', {}).get('items', [])
+                
+                # Build modal blocks
+                blocks = [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Bucket:* {bucket_name}\n*Bucket ID:* {bucket_id or 'n/a'}\n*Asset ID:* {item_id or 'n/a'}"
+                        }
+                    },
+                    {
+                        "type": "divider"
+                    }
+                ]
+                
+                if backups:
+                    # Add header for backups list
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Backups ({len(backups)} total):*"
+                        }
+                    })
+                    
+                    # Add each backup as a section (limit to 50 for modal)
+                    for idx, backup in enumerate(backups[:50], 1):
+                        backup_id = backup.get('id', 'unknown')
+                        backup_time = backup.get('backup_timestamp', backup.get('created_at', 'unknown'))
+                        backup_status = backup.get('status', 'unknown')
+                        backup_size = backup.get('size', backup.get('backup_size', 'unknown'))
+                        
+                        blocks.append({
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": (
+                                    f"*{idx}. Backup ID:* `{backup_id}`\n"
+                                    f"*Time:* {backup_time}\n"
+                                    f"*Status:* {backup_status}\n"
+                                    f"*Size:* {backup_size}"
+                                )
+                            }
+                        })
+                        
+                        # Add divider between backups (except for last one)
+                        if idx < min(len(backups), 50):
+                            blocks.append({
+                                "type": "divider"
+                            })
+                    
+                    if len(backups) > 50:
+                        blocks.append({
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*... and {len(backups) - 50} more backups*"
+                            }
+                        })
+                else:
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*No backups found for bucket: {bucket_name}*"
+                        }
+                    })
+                
+                # Open modal using Slack Web API
+                import requests
+                slack_bot_token = os.getenv('SLACK_BOT_TOKEN')
+                if slack_bot_token:
+                    modal_response = requests.post(
+                        'https://slack.com/api/views.open',
+                        headers={
+                            'Authorization': f'Bearer {slack_bot_token}',
+                            'Content-Type': 'application/json'
+                        },
+                        json={
+                            'trigger_id': trigger_id,
+                            'view': {
+                                "type": "modal",
+                                "callback_id": "view_bucket_modal",
+                                "title": {
+                                    "type": "plain_text",
+                                    "text": f"Backups: {bucket_name[:50]}"
+                                },
+                                "close": {
+                                    "type": "plain_text",
+                                    "text": "Close"
+                                },
+                                "blocks": blocks,
+                                "private_metadata": json.dumps({
+                                    "item_id": item_id,
+                                    "bucket_id": bucket_id,
+                                    "bucket_name": bucket_name
+                                })
+                            }
+                        }
+                    )
+                    print(f"Modal open response: {modal_response.status_code} - {modal_response.text}")
+                else:
+                    print("SLACK_BOT_TOKEN not found, cannot open modal")
+                
+                # Acknowledge immediately
+                return jsonify({}), 200
+                
+            except Exception as e:
+                import traceback
+                print(f"Error opening modal for view_bucket: {str(e)}")
+                print(traceback.format_exc())
+                # Fall through to acknowledge
+        
+        # Parse the value JSON to get the asset_id (for other actions)
         try:
             item_data = json.loads(action_value)
             asset_id = item_data.get('id', '')
