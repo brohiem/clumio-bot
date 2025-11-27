@@ -913,22 +913,87 @@ if slack_app:
     
     @slack_app.command("/restore")
     def handle_restore_command(ack, body, client, respond):
-        """Handle /restore Slack command - opens modal for restore workflow"""
+        """Handle /restore Slack command - opens modal for restore workflow or performs restore if parameters provided"""
         ack()
         
         text = body.get("text", "").strip()
         
-        # Parse account from command text if provided
+        # Parse parameters from text (e.g., "type=s3 account=761018876565" or "type=s3 bucket-name=mybucket")
+        restore_type = None
         account_native_id = None
+        bucket_name = None
+        bucket_id = None
+        object_key = None
+        
         if text:
             parts = text.split()
             for part in parts:
                 if "=" in part:
                     key, value = part.split("=", 1)
-                    if key.strip() == "account":
-                        account_native_id = value.strip()
+                    key = key.strip()
+                    value = value.strip()
+                    if key == "type":
+                        restore_type = value
+                    elif key == "account":
+                        account_native_id = value
+                    elif key == "bucket-name":
+                        bucket_name = value
+                    elif key == "bucket-id":
+                        bucket_id = value
+                    elif key == "object-key" or key == "object_key":
+                        object_key = value
         
-        # Open modal
+        # If type is provided, try to perform restore directly (if we have bucket info)
+        # Otherwise, open modal
+        if restore_type and (bucket_name or bucket_id):
+            # Perform restore directly
+            try:
+                result = clumio_client.restore(
+                    restore_type,
+                    bucket_name=bucket_name,
+                    bucket_id=bucket_id,
+                    object_key=object_key
+                )
+                
+                result_json = json.dumps(result, indent=2)
+                respond(
+                    blocks=[
+                        {
+                            "type": "header",
+                            "text": {
+                                "type": "plain_text",
+                                "text": "Clumio Restore",
+                                "emoji": True
+                            }
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*Restore initiated successfully* :rocket:\n\n*Type:* {restore_type}\n*Bucket:* {bucket_name or 'N/A'}\n*Bucket ID:* {bucket_id or 'N/A'}"
+                            }
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"```{result_json}```"
+                            }
+                        }
+                    ],
+                    response_type="ephemeral"
+                )
+            except Exception as e:
+                import traceback
+                print(f"Restore command error: {str(e)}")
+                print(traceback.format_exc())
+                respond(
+                    text=f"Error performing restore: {str(e)}",
+                    response_type="ephemeral"
+                )
+            return
+        
+        # Open modal (default behavior when no bucket info provided)
         try:
             result = client.views_open(
                 trigger_id=body["trigger_id"],
