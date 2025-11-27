@@ -842,8 +842,8 @@ if slack_app:
     
     # Slack button action handlers
     @slack_app.action("view_bucket")
-    def handle_view_bucket(ack, body, respond):
-        """Handle View Bucket button click"""
+    def handle_view_bucket(ack, body, client):
+        """Handle View Bucket button click - opens modal with backup list"""
         ack()
         
         try:
@@ -859,57 +859,120 @@ if slack_app:
             # Retrieve backup metadata for this bucket
             backup_data = clumio_client.get_s3_asset_backups(item_id)
             backups = backup_data.get('_embedded', {}).get('items', [])
+            
+            # Build modal blocks
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Bucket:* {bucket_name}\n*Bucket ID:* {bucket_id or 'n/a'}\n*Asset ID:* {item_id or 'n/a'}"
+                    }
+                },
+                {
+                    "type": "divider"
+                }
+            ]
+            
             if backups:
-                first_backup = backups[0]
-                backup_id = first_backup.get('id', 'unknown')
-                backup_time = first_backup.get('backup_timestamp', first_backup.get('created_at', 'unknown'))
-                detail_text = (
-                    f"*Bucket:* {bucket_name}\n"
-                    f"*Bucket ID:* {bucket_id or 'n/a'}\n"
-                    f"*Asset ID:* {item_id or 'n/a'}\n"
-                    f"*Latest Backup ID:* {backup_id}\n"
-                    f"*Backup Time:* {backup_time or 'n/a'}"
-                )
-                backup_json = json.dumps(first_backup, indent=2)
-                respond(
-                    blocks=[
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": "*Latest backup details* :open_file_folder:"
-                            }
-                        },
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": detail_text
-                            }
-                        },
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"```{backup_json}```"
-                            }
+                # Add header for backups list
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Backups ({len(backups)} total):*"
+                    }
+                })
+                
+                # Add each backup as a section (limit to 50 for modal)
+                for idx, backup in enumerate(backups[:50], 1):
+                    backup_id = backup.get('id', 'unknown')
+                    backup_time = backup.get('backup_timestamp', backup.get('created_at', 'unknown'))
+                    backup_status = backup.get('status', 'unknown')
+                    backup_size = backup.get('size', backup.get('backup_size', 'unknown'))
+                    
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"*{idx}. Backup ID:* `{backup_id}`\n"
+                                f"*Time:* {backup_time}\n"
+                                f"*Status:* {backup_status}\n"
+                                f"*Size:* {backup_size}"
+                            )
                         }
-                    ],
-                    replace_original=True,
-                    response_type="ephemeral"
-                )
+                    })
+                    
+                    # Add divider between backups (except for last one)
+                    if idx < min(len(backups), 50):
+                        blocks.append({
+                            "type": "divider"
+                        })
+                
+                if len(backups) > 50:
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*... and {len(backups) - 50} more backups*"
+                        }
+                    })
             else:
-                respond(
-                    text=f"No backups found for bucket: {bucket_name} (Asset ID: {item_id})",
-                    replace_original=True,
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*No backups found for bucket: {bucket_name}*"
+                    }
+                })
+            
+            # Open modal with backup list
+            try:
+                client.views_open(
+                    trigger_id=body["trigger_id"],
+                    view={
+                        "type": "modal",
+                        "callback_id": "view_bucket_modal",
+                        "title": {
+                            "type": "plain_text",
+                            "text": f"Backups: {bucket_name}"
+                        },
+                        "close": {
+                            "type": "plain_text",
+                            "text": "Close"
+                        },
+                        "blocks": blocks,
+                        "private_metadata": json.dumps({
+                            "item_id": item_id,
+                            "bucket_id": bucket_id,
+                            "bucket_name": bucket_name
+                        })
+                    }
+                )
+            except Exception as e:
+                import traceback
+                print(f"Error opening view bucket modal: {str(e)}")
+                print(traceback.format_exc())
+                # Fallback: respond with error message
+                client.chat_postMessage(
+                    channel=body["channel"]["id"],
+                    text=f"Error opening modal: {str(e)}",
                     response_type="ephemeral"
                 )
         except Exception as e:
-            respond(
-                text=f"Error retrieving bucket backups: {str(e)}",
-                replace_original=True,
-                response_type="ephemeral"
-            )
+            import traceback
+            print(f"Error in handle_view_bucket: {str(e)}")
+            print(traceback.format_exc())
+            # Try to send error message
+            try:
+                client.chat_postMessage(
+                    channel=body["channel"]["id"],
+                    text=f"Error retrieving bucket backups: {str(e)}",
+                    response_type="ephemeral"
+                )
+            except:
+                pass
     
     @slack_app.command("/restore")
     def handle_restore_command(ack, body, client, respond):
