@@ -842,11 +842,15 @@ if slack_app:
     
     # Slack button action handlers
     @slack_app.action("view_bucket")
-    def handle_view_bucket(ack, body, client):
+    def handle_view_bucket(ack, body, client, respond):
         """Handle View Bucket button click - opens modal with backup list"""
         ack()
         
         try:
+            # Log the body to see what we're working with
+            print(f"View bucket action - body keys: {list(body.keys())}")
+            print(f"View bucket action - trigger_id: {body.get('trigger_id', 'NOT FOUND')}")
+            
             # Parse the value from the button
             value = body.get('actions', [{}])[0].get('value', '{}')
             item_data = json.loads(value)
@@ -860,8 +864,8 @@ if slack_app:
             backup_data = clumio_client.get_s3_asset_backups(item_id)
             backups = backup_data.get('_embedded', {}).get('items', [])
             
-            # Build modal blocks
-            blocks = [
+            # Build response blocks (for message response)
+            response_blocks = [
                 {
                     "type": "section",
                     "text": {
@@ -876,7 +880,7 @@ if slack_app:
             
             if backups:
                 # Add header for backups list
-                blocks.append({
+                response_blocks.append({
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
@@ -884,14 +888,14 @@ if slack_app:
                     }
                 })
                 
-                # Add each backup as a section (limit to 50 for modal)
+                # Add each backup as a section (limit to 50 for display)
                 for idx, backup in enumerate(backups[:50], 1):
                     backup_id = backup.get('id', 'unknown')
                     backup_time = backup.get('backup_timestamp', backup.get('created_at', 'unknown'))
                     backup_status = backup.get('status', 'unknown')
                     backup_size = backup.get('size', backup.get('backup_size', 'unknown'))
                     
-                    blocks.append({
+                    response_blocks.append({
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
@@ -906,12 +910,12 @@ if slack_app:
                     
                     # Add divider between backups (except for last one)
                     if idx < min(len(backups), 50):
-                        blocks.append({
+                        response_blocks.append({
                             "type": "divider"
                         })
                 
                 if len(backups) > 50:
-                    blocks.append({
+                    response_blocks.append({
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
@@ -919,7 +923,7 @@ if slack_app:
                         }
                     })
             else:
-                blocks.append({
+                response_blocks.append({
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
@@ -927,48 +931,63 @@ if slack_app:
                     }
                 })
             
-            # Open modal with backup list
-            try:
-                client.views_open(
-                    trigger_id=body["trigger_id"],
-                    view={
-                        "type": "modal",
-                        "callback_id": "view_bucket_modal",
-                        "title": {
-                            "type": "plain_text",
-                            "text": f"Backups: {bucket_name}"
-                        },
-                        "close": {
-                            "type": "plain_text",
-                            "text": "Close"
-                        },
-                        "blocks": blocks,
-                        "private_metadata": json.dumps({
-                            "item_id": item_id,
-                            "bucket_id": bucket_id,
-                            "bucket_name": bucket_name
-                        })
-                    }
-                )
-            except Exception as e:
-                import traceback
-                print(f"Error opening view bucket modal: {str(e)}")
-                print(traceback.format_exc())
-                # Fallback: respond with error message
-                client.chat_postMessage(
-                    channel=body["channel"]["id"],
-                    text=f"Error opening modal: {str(e)}",
-                    response_type="ephemeral"
-                )
+            # Try to open modal if trigger_id is available
+            trigger_id = body.get('trigger_id')
+            if trigger_id:
+                try:
+                    # Build modal blocks (same as response blocks)
+                    modal_blocks = response_blocks.copy()
+                    
+                    client.views_open(
+                        trigger_id=trigger_id,
+                        view={
+                            "type": "modal",
+                            "callback_id": "view_bucket_modal",
+                            "title": {
+                                "type": "plain_text",
+                                "text": f"Backups: {bucket_name[:50]}"  # Limit title length
+                            },
+                            "close": {
+                                "type": "plain_text",
+                                "text": "Close"
+                            },
+                            "blocks": modal_blocks,
+                            "private_metadata": json.dumps({
+                                "item_id": item_id,
+                                "bucket_id": bucket_id,
+                                "bucket_name": bucket_name
+                            })
+                        }
+                    )
+                    print(f"Successfully opened modal for bucket: {bucket_name}")
+                    return
+                except Exception as e:
+                    import traceback
+                    error_msg = str(e)
+                    error_trace = traceback.format_exc()
+                    print(f"Error opening view bucket modal: {error_msg}")
+                    print(f"Traceback: {error_trace}")
+                    # Fall through to respond with message
+            
+            # Fallback: respond with message if modal can't be opened
+            print("Falling back to message response (no trigger_id or modal failed)")
+            respond(
+                blocks=response_blocks,
+                replace_original=False,
+                response_type="ephemeral"
+            )
+            
         except Exception as e:
             import traceback
-            print(f"Error in handle_view_bucket: {str(e)}")
-            print(traceback.format_exc())
+            error_msg = str(e)
+            error_trace = traceback.format_exc()
+            print(f"Error in handle_view_bucket: {error_msg}")
+            print(f"Traceback: {error_trace}")
             # Try to send error message
             try:
-                client.chat_postMessage(
-                    channel=body["channel"]["id"],
-                    text=f"Error retrieving bucket backups: {str(e)}",
+                respond(
+                    text=f"Error retrieving bucket backups: {error_msg}",
+                    replace_original=False,
                     response_type="ephemeral"
                 )
             except:
