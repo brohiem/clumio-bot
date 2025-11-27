@@ -847,9 +847,12 @@ if slack_app:
         ack()
         
         try:
-            # Log the body to see what we're working with
+            # Log the full body to debug
+            print(f"View bucket action - Full body: {json.dumps(body, indent=2, default=str)}")
             print(f"View bucket action - body keys: {list(body.keys())}")
             print(f"View bucket action - trigger_id: {body.get('trigger_id', 'NOT FOUND')}")
+            print(f"View bucket action - has actions: {bool(body.get('actions'))}")
+            print(f"View bucket action - channel: {body.get('channel', {}).get('id', 'NOT FOUND')}")
             
             # Parse the value from the button
             value = body.get('actions', [{}])[0].get('value', '{}')
